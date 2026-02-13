@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subly - 订阅管理</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <div class="bg-grid"></div>
+
+  <section id="authPage" class="auth-page">
+    <div class="auth-card">
+      <h2>登录 Subly</h2>
+      <p>请先登录或注册后再管理你的订阅数据</p>
+      <div class="auth-tabs">
+        <button type="button" id="showLoginBtn" class="primary">登录</button>
+        <button type="button" id="showRegisterBtn">注册</button>
+      </div>
+      <form id="loginForm" class="auth-form">
+        <label>
+          用户名
+          <input id="loginUsername" required>
+        </label>
+        <label>
+          密码
+          <input id="loginPassword" type="password" required>
+        </label>
+        <button type="submit" class="primary">登录</button>
+      </form>
+      <form id="registerForm" class="auth-form hidden">
+        <label>
+          用户名
+          <input id="registerUsername" required>
+        </label>
+        <label>
+          密码（至少 6 位）
+          <input id="registerPassword" type="password" required>
+        </label>
+        <button type="submit" class="primary">注册并进入</button>
+      </form>
+      <div id="authMessage" class="auth-message"></div>
+    </div>
+  </section>
+
+  <div id="appShell" class="layout hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">
+          <img src="/assets/subly-logo.svg" alt="Subly Logo">
+        </div>
+        <div>
+          <h1>Subly</h1>
+          <p>Subscription OS</p>
+        </div>
+      </div>
+
+      <nav class="side-nav">
+        <button type="button" class="active" data-page-target="dashboardPage" data-nav-key="overview" data-scroll-target="summaryCards">总览</button>
+        <button type="button" data-page-target="dashboardPage" data-nav-key="list" data-scroll-target="subscriptionTableBody">订阅列表</button>
+        <button type="button" data-page-target="dashboardPage" data-nav-key="reports" data-scroll-target="categoryChart">报表分析</button>
+        <button type="button" data-page-target="settingsPage" data-nav-key="settings">设置</button>
+      </nav>
+      <button type="button" id="openFormBtn" class="side-add-btn">+ 添加订阅</button>
+      <div class="user-box">
+        <div id="currentUser">未登录</div>
+        <button type="button" id="logoutBtn">退出登录</button>
+      </div>
+
+      <div class="side-tip">
+        <h3>提示</h3>
+        <p>你可以在右侧切换基准货币，所有报表会自动换算。</p>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <section id="dashboardPage" class="page active-page">
+      <header class="hero">
+        <h2>订阅管理面板</h2>
+        <p>清楚掌握订阅内容、下次扣费时间和支出报表</p>
+      </header>
+
+      <section id="overviewFeature" class="feature-section active-feature">
+        <section class="cards" id="summaryCards"></section>
+      </section>
+
+      <section id="listFeature" class="feature-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>订阅列表</h2>
+            <div class="toolbar">
+              <select id="baseCurrency"></select>
+              <input id="searchInput" placeholder="搜索名称或分类">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="sub-table">
+              <thead>
+                <tr>
+                  <th>订阅信息</th>
+                  <th>分类</th>
+                  <th>金额</th>
+                  <th>周期</th>
+                  <th>状态</th>
+                  <th>下次扣费</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="subscriptionTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="reportsFeature" class="feature-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>报表</h2>
+            <div class="toolbar">
+              <span id="rateInfo"></span>
+              <button type="button" id="refreshRatesBtn">刷新汇率</button>
+            </div>
+          </div>
+          <div class="reports">
+            <div class="report-card">
+              <h3>按分类月均支出</h3>
+              <div id="categoryChart" class="chart"></div>
+            </div>
+            <div class="report-card">
+              <div class="report-head">
+                <h3 id="monthlyChartTitle">未来 6 个月预计支出</h3>
+                <select id="futureMonthsRangeSelect" class="months-select">
+                  <option value="6" selected>6个月</option>
+                  <option value="12">12个月</option>
+                </select>
+              </div>
+              <div id="monthlyChart" class="chart"></div>
+            </div>
+            <div class="report-card">
+              <div class="report-head">
+                <h3 id="pastMonthlyChartTitle">过去 6 个月支出情况</h3>
+                <select id="pastMonthsRangeSelect" class="months-select">
+                  <option value="6" selected>6个月</option>
+                  <option value="12">12个月</option>
+                </select>
+              </div>
+              <div id="pastMonthlyChart" class="chart"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+      </section>
+
+      <section id="settingsPage" class="page">
+        <header class="hero">
+          <h2>系统设置</h2>
+          <p>配置默认货币、汇率刷新策略和显示选项</p>
+        </header>
+
+        <section class="panel">
+          <h2>基础设置</h2>
+          <form id="settingsForm" class="grid">
+            <label>
+              默认基准货币
+              <select id="settingsBaseCurrency"></select>
+            </label>
+            <label>
+              汇率自动刷新间隔（分钟）
+              <select id="settingsRateInterval">
+                <option value="5">5 分钟</option>
+                <option value="10">10 分钟</option>
+                <option value="30">30 分钟</option>
+                <option value="60">60 分钟</option>
+              </select>
+            </label>
+            <label>
+              报表默认周期
+              <select id="settingsDefaultMonths">
+                <option value="6">6个月</option>
+                <option value="12">12个月</option>
+              </select>
+            </label>
+            <label class="full checkbox-line">
+              <input type="checkbox" id="settingsShowApprox" checked>
+              列表中显示“折算金额（≈）”
+            </label>
+            <div class="actions full">
+              <button type="submit" class="primary">保存设置</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>账户安全</h2>
+          <form id="passwordForm" class="grid">
+            <label>
+              当前密码
+              <input id="currentPassword" type="password" required>
+            </label>
+            <label>
+              新密码（至少 6 位）
+              <input id="newPassword" type="password" required>
+            </label>
+            <label class="full">
+              确认新密码
+              <input id="confirmPassword" type="password" required>
+            </label>
+            <div class="actions full">
+              <button type="submit" class="primary">修改密码</button>
+            </div>
+          </form>
+          <div id="passwordMessage" class="auth-message"></div>
+        </section>
+
+        <section class="panel">
+          <h2>关于</h2>
+          <div class="setting-note">
+            <p>当前数据存储：SQLite（`subly.db`）</p>
+            <p>汇率来源：后端实时拉取（失败自动回退）</p>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="formDrawer" class="drawer-backdrop hidden">
+    <section class="drawer-panel">
+      <div class="drawer-head">
+        <h2 id="formTitle">新增订阅</h2>
+        <button type="button" id="closeFormBtn">关闭</button>
+      </div>
+      <form id="subscriptionForm" class="grid">
+        <input type="hidden" id="subId">
+        <label>
+          订阅名称
+          <input id="name" required placeholder="例如：Spotify / ChatGPT Plus">
+        </label>
+        <label>
+          分类
+          <select id="categorySelect" required>
+            <option value="">请选择分类</option>
+            <option value="__custom__">自定义输入...</option>
+          </select>
+          <input id="categoryCustom" class="hidden" placeholder="输入新分类，例如：家庭 / 交通 / 软件">
+        </label>
+        <label>
+          金额
+          <input id="price" type="number" min="0" step="0.01" required>
+        </label>
+        <label>
+          币种
+          <select id="currency" required></select>
+        </label>
+        <label class="full">
+          标签（可选）
+          <input id="tags" placeholder="多个标签用逗号分隔，例如：工作,AI,团队">
+        </label>
+        <label class="full">
+          图标 URL（可选，优先使用）
+          <input id="iconUrl" placeholder="https://example.com/logo.png">
+        </label>
+        <label>
+          计费周期
+          <select id="cycle" required>
+            <option value="weekly">每周</option>
+            <option value="monthly" selected>每月</option>
+            <option value="quarterly">每季度</option>
+            <option value="yearly">每年</option>
+          </select>
+        </label>
+        <label>
+          下次扣费日期
+          <input id="nextPaymentDate" type="date" required>
+        </label>
+        <label>
+          状态
+          <select id="status">
+            <option value="active" selected>活跃</option>
+            <option value="paused">暂停</option>
+            <option value="canceled">已取消</option>
+          </select>
+        </label>
+        <label class="full">
+          备注
+          <input id="note" placeholder="可选">
+        </label>
+        <div class="actions full">
+          <button type="submit" class="primary">保存</button>
+          <button type="button" id="resetBtn">清空</button>
+        </div>
+      </form>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
