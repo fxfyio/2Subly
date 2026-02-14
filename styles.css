@@ -662,6 +662,62 @@ button {
   margin-top: 6px;
 }
 
+.icon-resolve-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbe6fb;
+  background: #f7faff;
+  border-radius: 12px;
+}
+
+.icon-resolve-preview.hidden {
+  display: none;
+}
+
+.icon-resolve-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #d9e4fb;
+  background: #edf3ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex: 0 0 34px;
+}
+
+.icon-resolve-badge img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.icon-resolve-fallback {
+  font-size: 14px;
+  font-weight: 700;
+  color: #324b73;
+}
+
+.icon-resolve-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.icon-resolve-title {
+  font-size: 13px;
+  color: #214066;
+  font-weight: 700;
+}
+
+.icon-resolve-desc {
+  font-size: 12px;
+  color: #6d82a5;
+}
+
 input,
 select {
   background: var(--panel-strong);

@@ -4,6 +4,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -12,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,6 +30,7 @@ SESSION_EXPIRE_DAYS = 14
 PASSWORD_ITERATIONS = 180000
 
 FX_CACHE_TTL_SECONDS = 30 * 60
+ICON_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 FALLBACK_USD_RATES = {
   "USD": 1.0,
   "CNY": 7.2,
@@ -57,6 +59,20 @@ CURRENCY_NAME_CACHE = {
   "loaded_at": 0.0,
   "names": {},
 }
+
+SERVICE_ICON_HINTS = [
+  {"keyword": "chatgpt", "domain": "chatgpt.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/openai.svg"},
+  {"keyword": "openai", "domain": "openai.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/openai.svg"},
+  {"keyword": "spotify", "domain": "spotify.com", "icon": "https://cdn.simpleicons.org/spotify/1DB954"},
+  {"keyword": "youtube", "domain": "youtube.com", "icon": "https://cdn.simpleicons.org/youtube/FF0000"},
+  {"keyword": "netflix", "domain": "netflix.com", "icon": "https://cdn.simpleicons.org/netflix/E50914"},
+  {"keyword": "notion", "domain": "notion.so", "icon": "https://cdn.simpleicons.org/notion/000000"},
+  {"keyword": "github", "domain": "github.com", "icon": "https://cdn.simpleicons.org/github/181717"},
+  {"keyword": "icloud", "domain": "icloud.com", "icon": "https://cdn.simpleicons.org/icloud/3693F3"},
+  {"keyword": "cloudflare", "domain": "cloudflare.com", "icon": "https://cdn.simpleicons.org/cloudflare/F38020"},
+  {"keyword": "microsoft", "domain": "microsoft.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/microsoft.svg"},
+  {"keyword": "canva", "domain": "canva.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/canva.svg"},
+]
 
 DEMO_SUBSCRIPTIONS = [
   ("ChatGPT Plus", "效率工具", 20.0, "USD", "monthly"),
@@ -227,6 +243,16 @@ def init_db():
       )
       """
     )
+    conn.execute(
+      """
+      CREATE TABLE IF NOT EXISTS icon_cache (
+        cache_key TEXT PRIMARY KEY,
+        icon_url TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+      """
+    )
 
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
     if "currency" not in columns:
@@ -282,6 +308,140 @@ def normalize_currency(value):
   if not all(ch.isalnum() for ch in code):
     return None
   return code
+
+
+def normalize_service_text(value):
+  text = (value or "").strip().lower()
+  text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
+  text = re.sub(r"\s+", " ", text).strip()
+  return text
+
+
+def slugify_service_name(value):
+  text = (value or "").strip().lower()
+  text = re.sub(r"[^a-z0-9]+", "", text)
+  return text
+
+
+def icon_cache_get(cache_key):
+  now = now_dt()
+  with db_conn() as conn:
+    row = conn.execute(
+      "SELECT icon_url, provider, updated_at FROM icon_cache WHERE cache_key = ?",
+      (cache_key,),
+    ).fetchone()
+  if not row:
+    return None
+  try:
+    updated = parse_iso(row["updated_at"])
+  except Exception:
+    return None
+  if (now - updated).total_seconds() > ICON_CACHE_TTL_SECONDS:
+    return None
+  return {
+    "iconUrl": row["icon_url"],
+    "provider": row["provider"],
+    "cached": True,
+  }
+
+
+def icon_cache_set(cache_key, icon_url, provider):
+  ts = now_iso()
+  with db_conn() as conn:
+    conn.execute(
+      """
+      INSERT INTO icon_cache (cache_key, icon_url, provider, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET
+        icon_url = excluded.icon_url,
+        provider = excluded.provider,
+        updated_at = excluded.updated_at
+      """,
+      (cache_key, icon_url, provider, ts),
+    )
+
+
+def check_icon_url(url):
+  req = Request(
+    url,
+    headers={
+      "User-Agent": "Subly/1.0 (+https://localhost)",
+      "Accept": "image/*,*/*;q=0.8",
+    },
+  )
+  with urlopen(req, timeout=4) as resp:
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "image" in ctype or "svg" in ctype or "icon" in ctype:
+      return True
+    # Some favicon endpoints omit content-type. Probe body as fallback.
+    body = resp.read(64)
+    return bool(body)
+
+
+def build_icon_candidates(name, category=""):
+  n = normalize_service_text(name)
+  c = normalize_service_text(category)
+  candidates = []
+  seen = set()
+
+  def add(url, provider):
+    key = f"{provider}|{url}"
+    if not url or key in seen:
+      return
+    seen.add(key)
+    candidates.append((url, provider))
+
+  for item in SERVICE_ICON_HINTS:
+    if item["keyword"] in n:
+      add(item.get("icon", ""), "hint-simpleicons")
+      domain = item.get("domain", "")
+      if domain:
+        add(f"https://www.google.com/s2/favicons?sz=128&domain={quote(domain)}", "google-favicon")
+        add(f"https://icons.duckduckgo.com/ip3/{quote(domain)}.ico", "duckduckgo-favicon")
+
+  slug = slugify_service_name(name)
+  if slug:
+    slug_variants = [slug]
+    compact = re.sub(r"(plus|premium|pro|official|app)$", "", slug)
+    if compact and compact != slug:
+      slug_variants.append(compact)
+    first_word = re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip().split(" ")[0]
+    if first_word:
+      slug_variants.append(first_word)
+
+    for s in slug_variants[:4]:
+      add(f"https://cdn.simpleicons.org/{quote(s)}", "simpleicons-cdn")
+      add(f"https://cdn.jsdelivr.net/npm/simple-icons/icons/{quote(s)}.svg", "simpleicons-jsdelivr")
+      for tld in ("com", "io", "ai", "app", "co", "dev"):
+        domain = f"{s}.{tld}"
+        add(f"https://www.google.com/s2/favicons?sz=128&domain={quote(domain)}", "google-favicon")
+        add(f"https://icons.duckduckgo.com/ip3/{quote(domain)}.ico", "duckduckgo-favicon")
+
+  if "云" in c or "cloud" in c:
+    add("https://cdn.simpleicons.org/vercel/000000", "category-hint")
+  if "娱乐" in c or "video" in c or "music" in c:
+    add("https://cdn.simpleicons.org/plex/EBAF00", "category-hint")
+  return candidates[:24]
+
+
+def resolve_icon_url(name, category=""):
+  cache_key = f"{normalize_service_text(name)}|{normalize_service_text(category)}"
+  if not cache_key or cache_key == "|":
+    return {"iconUrl": "", "provider": "none", "cached": False}
+
+  cached = icon_cache_get(cache_key)
+  if cached:
+    return cached
+
+  for url, provider in build_icon_candidates(name, category):
+    try:
+      if check_icon_url(url):
+        icon_cache_set(cache_key, url, provider)
+        return {"iconUrl": url, "provider": provider, "cached": False}
+    except Exception:
+      continue
+
+  return {"iconUrl": "", "provider": "none", "cached": False}
 
 
 def normalize_payload(payload):
@@ -934,6 +1094,22 @@ class Handler(BaseHTTPRequestHandler):
 
   def do_POST(self):
     parsed = urlparse(self.path)
+
+    if parsed.path == "/api/icons/resolve":
+      user = self._require_auth()
+      if not user:
+        return
+      payload = self._read_json_body()
+      if payload is None:
+        self._send_json(400, {"error": "Invalid JSON"})
+        return
+      name = str(payload.get("name") or "").strip()
+      category = str(payload.get("category") or "").strip()
+      if not name:
+        self._send_json(400, {"error": "Missing name"})
+        return
+      self._send_json(200, resolve_icon_url(name, category))
+      return
 
     if parsed.path == "/api/auth/register":
       payload = self._read_json_body()

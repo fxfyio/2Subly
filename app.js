@@ -5,6 +5,7 @@ const ADMIN_USERS_API = "/api/admin/users";
 const ADMIN_USER_STATUS_API = "/api/admin/users/status";
 const CURRENCY_CATALOG_API = "/api/currencies";
 const CURRENCY_RATE_API = "/api/currency-rate";
+const ICON_RESOLVE_API = "/api/icons/resolve";
 const PREF_KEY = "subly_base_currency_v1";
 const SETTINGS_KEY = "subly_settings_v1";
 const AUTH_TOKEN_KEY = "subly_auth_token_v1";
@@ -157,6 +158,9 @@ const state = {
   formTags: [],
   adminUsers: [],
   currencyCatalog: [],
+  iconResolveTimerId: null,
+  iconResolveSeq: 0,
+  autoResolvedIconUrl: "",
 };
 
 const els = {
@@ -188,6 +192,7 @@ const els = {
   tagPreview: document.getElementById("tagPreview"),
   tags: document.getElementById("tags"),
   iconUrl: document.getElementById("iconUrl"),
+  iconResolvePreview: document.getElementById("iconResolvePreview"),
   cycle: document.getElementById("cycle"),
   nextPaymentDate: document.getElementById("nextPaymentDate"),
   status: document.getElementById("status"),
@@ -455,6 +460,84 @@ function serviceIconMeta(sub) {
     bg: fromCategory.bg,
     letter: (sub.name || "?").trim().slice(0, 1).toUpperCase(),
   };
+}
+
+function clearIconResolvePreview() {
+  state.autoResolvedIconUrl = "";
+  if (!els.iconResolvePreview) return;
+  els.iconResolvePreview.classList.add("hidden");
+  els.iconResolvePreview.innerHTML = "";
+}
+
+function renderIconResolvePreview({ iconUrl = "", source = "none", text = "", name = "" }) {
+  if (!els.iconResolvePreview) return;
+  if (!iconUrl && source !== "loading") {
+    clearIconResolvePreview();
+    return;
+  }
+  const letter = (name || els.name.value || "?").trim().slice(0, 1).toUpperCase() || "?";
+  const title =
+    source === "manual"
+      ? "使用手动图标"
+      : source === "loading"
+        ? "正在自动识别图标..."
+        : source === "auto"
+          ? "自动识别到图标"
+          : "图标预览";
+  const desc =
+    text ||
+    (source === "manual"
+      ? "保存时将优先使用此 URL"
+      : source === "loading"
+        ? "请稍候，识别完成后会自动展示"
+        : "保存时会使用该自动识别结果");
+  const iconHtml = iconUrl
+    ? `<img src="${escapeHtml(iconUrl)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';">`
+    : "";
+  els.iconResolvePreview.classList.remove("hidden");
+  els.iconResolvePreview.innerHTML = `
+    <span class="icon-resolve-badge">
+      ${iconHtml}
+      <span class="icon-resolve-fallback"${iconUrl ? ' style="display:none"' : ""}>${escapeHtml(letter)}</span>
+    </span>
+    <span class="icon-resolve-meta">
+      <span class="icon-resolve-title">${escapeHtml(title)}</span>
+      <span class="icon-resolve-desc">${escapeHtml(desc)}</span>
+    </span>
+  `;
+}
+
+function scheduleAutoIconResolve() {
+  const manual = normalizeIconUrl(els.iconUrl.value);
+  if (manual) {
+    state.autoResolvedIconUrl = "";
+    renderIconResolvePreview({ iconUrl: manual, source: "manual", name: els.name.value });
+    return;
+  }
+  const name = els.name.value.trim();
+  const category = getCategoryValue();
+  if (!name) {
+    clearIconResolvePreview();
+    return;
+  }
+  if (state.iconResolveTimerId) clearTimeout(state.iconResolveTimerId);
+  const seq = ++state.iconResolveSeq;
+  renderIconResolvePreview({ source: "loading", name });
+  state.iconResolveTimerId = setTimeout(async () => {
+    try {
+      const resolved = await resolveIconOnline(name, category);
+      if (seq !== state.iconResolveSeq) return;
+      state.autoResolvedIconUrl = resolved || "";
+      if (state.autoResolvedIconUrl) {
+        renderIconResolvePreview({ iconUrl: state.autoResolvedIconUrl, source: "auto", name });
+      } else {
+        clearIconResolvePreview();
+      }
+    } catch (_err) {
+      if (seq !== state.iconResolveSeq) return;
+      clearIconResolvePreview();
+    }
+  }, 480);
 }
 
 function rateFor(code) {
@@ -1083,6 +1166,14 @@ async function setAdminUserStatus(userId, disabled) {
   });
 }
 
+async function resolveIconOnline(name, category) {
+  const payload = await request(ICON_RESOLVE_API, {
+    method: "POST",
+    body: JSON.stringify({ name, category }),
+  });
+  return normalizeIconUrl(payload?.iconUrl || "");
+}
+
 async function markPaid(id) {
   const sub = state.subscriptions.find((s) => s.id === id);
   if (!sub) return;
@@ -1132,6 +1223,9 @@ function resetForm() {
   els.tagSelect.value = "";
   setFormTags([]);
   els.iconUrl.value = "";
+  state.iconResolveSeq += 1;
+  if (state.iconResolveTimerId) clearTimeout(state.iconResolveTimerId);
+  clearIconResolvePreview();
   setCategoryValue("");
 }
 
@@ -1155,6 +1249,13 @@ function editSubscription(id) {
   els.tagSelect.value = "";
   setFormTags(sub.tags);
   els.iconUrl.value = sub.iconUrl || "";
+  state.iconResolveSeq += 1;
+  if (state.iconResolveTimerId) clearTimeout(state.iconResolveTimerId);
+  if (els.iconUrl.value) {
+    renderIconResolvePreview({ iconUrl: els.iconUrl.value, source: "manual", name: sub.name });
+  } else {
+    scheduleAutoIconResolve();
+  }
   els.cycle.value = sub.cycle;
   els.nextPaymentDate.value = sub.nextPaymentDate;
   els.status.value = sub.status;
@@ -1651,6 +1752,17 @@ function bindEvents() {
     }
 
     try {
+      if (!payload.iconUrl && state.autoResolvedIconUrl) {
+        payload.iconUrl = state.autoResolvedIconUrl;
+      }
+      if (!payload.iconUrl) {
+        try {
+          const autoIcon = await resolveIconOnline(payload.name, payload.category);
+          if (autoIcon) payload.iconUrl = autoIcon;
+        } catch (_err) {
+          // ignore auto-resolve failure; keep manual/fallback behavior
+        }
+      }
       if (isEdit) {
         await updateSubscription(payload.id, payload);
       } else {
@@ -1846,7 +1958,13 @@ function bindEvents() {
     state.keyword = e.target.value;
     renderTable();
   });
-  els.categorySelect.addEventListener("change", toggleCategoryCustom);
+  els.name.addEventListener("input", scheduleAutoIconResolve);
+  els.iconUrl.addEventListener("input", scheduleAutoIconResolve);
+  els.categorySelect.addEventListener("change", () => {
+    toggleCategoryCustom();
+    scheduleAutoIconResolve();
+  });
+  els.categoryCustom.addEventListener("input", scheduleAutoIconResolve);
   els.addTagToFormBtn.addEventListener("click", () => {
     if (!els.tagSelect.value) return;
     addFormTag(els.tagSelect.value);
