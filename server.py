@@ -84,6 +84,34 @@ def parse_iso(dt_text):
   return datetime.fromisoformat(dt_text.replace("Z", "+00:00"))
 
 
+def prepare_db_path():
+  global DB_PATH
+  candidates = [DB_PATH]
+  fallback = Path("/tmp/subly.db")
+  if fallback not in candidates:
+    candidates.append(fallback)
+
+  last_err = None
+  for candidate in candidates:
+    try:
+      candidate.parent.mkdir(parents=True, exist_ok=True)
+      probe = candidate.parent / ".subly_write_probe"
+      with probe.open("a", encoding="utf-8"):
+        pass
+      try:
+        probe.unlink()
+      except OSError:
+        pass
+      if candidate != DB_PATH:
+        print(f"[WARN] DB path '{DB_PATH}' not writable, fallback to '{candidate}'")
+      DB_PATH = candidate
+      return
+    except OSError as err:
+      last_err = err
+
+  raise RuntimeError(f"no writable database path for '{DB_PATH}': {last_err}")
+
+
 def db_conn():
   conn = sqlite3.connect(DB_PATH)
   conn.row_factory = sqlite3.Row
@@ -143,6 +171,7 @@ def seed_demo_subscriptions_for_user(conn, user_id):
 
 
 def init_db():
+  prepare_db_path()
   DB_PATH.parent.mkdir(parents=True, exist_ok=True)
   with db_conn() as conn:
     conn.execute(

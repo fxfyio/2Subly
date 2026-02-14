@@ -14,21 +14,13 @@
 
 ![Subly Dashboard](preview.png)
 
-## 数据存储位置
-
-- SQLite 文件：`/path/to/Subly2/subly.db`
-- 表名：`subscriptions`
-- 币种字段：`currency`
-- 汇率接口：`GET /api/rates?base=USD`
-- 用户表：`users`
-- 会话表：`sessions`
 
 ## 启动方式
 
 在项目目录执行：
 
 ```bash
-python3 /Users/zc/Desktop/Subly2/server.py
+python3 /path/to/2Subly/server.py
 ```
 
 访问：
@@ -90,9 +82,3 @@ docker run -d \
 - `SUPER_ADMIN_USERNAME`：超级管理员用户名
 - `SUPER_ADMIN_PASSWORD`：超级管理员密码（生产环境务必修改）
 
-## 文件结构
-
-- `/path/to/Subly2/index.html` 页面结构
-- `/path/to/Subly2/styles.css` 样式
-- `/path/to/Subly2/app.js` 前端逻辑（调用 API）
-- `/path/to/Subly2/server.py` 后端服务（API + 静态文件）
