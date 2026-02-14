@@ -6,18 +6,24 @@ import mimetypes
 import os
 import secrets
 import sqlite3
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "subly.db"
+DB_PATH_RAW = os.environ.get("DB_PATH", "subly.db")
+DB_PATH = Path(DB_PATH_RAW)
+if not DB_PATH.is_absolute():
+  DB_PATH = (BASE_DIR / DB_PATH).resolve()
+SUPER_ADMIN_USERNAME = os.environ.get("SUPER_ADMIN_USERNAME", "superadmin")
+SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "Subly@123456")
 
-CURRENCY_CODES = {"CNY", "USD", "EUR", "GBP", "JPY", "HKD", "SGD", "AUD", "CAD", "PHP"}
+CURRENCY_CODES = {"CNY", "TWD", "USD", "EUR", "GBP", "JPY", "HKD", "SGD", "AUD", "CAD", "PHP"}
 
 SESSION_EXPIRE_DAYS = 14
 PASSWORD_ITERATIONS = 180000
@@ -26,6 +32,7 @@ FX_CACHE_TTL_SECONDS = 30 * 60
 FALLBACK_USD_RATES = {
   "USD": 1.0,
   "CNY": 7.2,
+  "TWD": 32.0,
   "EUR": 0.93,
   "GBP": 0.79,
   "JPY": 150.0,
@@ -40,6 +47,15 @@ FX_CACHE = {
   "updated_at": "",
   "source": "fallback",
   "rates": FALLBACK_USD_RATES.copy(),
+  "missing_codes": sorted(CURRENCY_CODES),
+}
+OPEN_ER_CACHE = {
+  "loaded_at": 0.0,
+  "rates": {},
+}
+CURRENCY_NAME_CACHE = {
+  "loaded_at": 0.0,
+  "names": {},
 }
 
 DEMO_SUBSCRIPTIONS = [
@@ -93,12 +109,13 @@ def verify_password(password, salt_hex, digest_hex):
 def seed_demo_subscriptions_for_user(conn, user_id):
   today = datetime.now().date().isoformat()
   now = now_iso()
+  seed_tag = secrets.token_hex(4)
   rows = []
   for idx, item in enumerate(DEMO_SUBSCRIPTIONS, start=1):
     name, category, price, currency, cycle = item
     rows.append(
       (
-        f"{user_id}_demo_{idx}",
+        f"{user_id}_demo_{seed_tag}_{idx}",
         user_id,
         name,
         category,
@@ -126,12 +143,15 @@ def seed_demo_subscriptions_for_user(conn, user_id):
 
 
 def init_db():
+  DB_PATH.parent.mkdir(parents=True, exist_ok=True)
   with db_conn() as conn:
     conn.execute(
       """
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
+        is_super_admin INTEGER NOT NULL DEFAULT 0,
+        is_disabled INTEGER NOT NULL DEFAULT 0,
         password_salt TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -163,8 +183,18 @@ def init_db():
         status TEXT NOT NULL,
         note TEXT DEFAULT '',
         tags TEXT DEFAULT '[]',
+        deleted_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      )
+      """
+    )
+    conn.execute(
+      """
+      CREATE TABLE IF NOT EXISTS share_links (
+        token TEXT PRIMARY KEY,
+        user_id TEXT UNIQUE NOT NULL,
+        created_at TEXT NOT NULL
       )
       """
     )
@@ -181,13 +211,46 @@ def init_db():
     if "tags" not in columns:
       conn.execute("ALTER TABLE subscriptions ADD COLUMN tags TEXT DEFAULT '[]'")
       conn.execute("UPDATE subscriptions SET tags = '[]' WHERE tags IS NULL OR tags = ''")
+    if "deleted_at" not in columns:
+      conn.execute("ALTER TABLE subscriptions ADD COLUMN deleted_at TEXT DEFAULT NULL")
+
+    user_columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "is_super_admin" not in user_columns:
+      conn.execute("ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0")
+    if "is_disabled" not in user_columns:
+      conn.execute("ALTER TABLE users ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0")
+
+    row = conn.execute("SELECT id FROM users WHERE username = ?", (SUPER_ADMIN_USERNAME,)).fetchone()
+    if not row:
+      user_id = secrets.token_hex(8)
+      salt_hex, pass_hex = create_password_hash(SUPER_ADMIN_PASSWORD)
+      created = now_iso()
+      conn.execute(
+        "INSERT INTO users (id, username, is_super_admin, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, SUPER_ADMIN_USERNAME, 1, salt_hex, pass_hex, created),
+      )
+    else:
+      user_id = row["id"]
+
+    conn.execute("UPDATE users SET is_super_admin = 0 WHERE username <> ?", (SUPER_ADMIN_USERNAME,))
+    conn.execute("UPDATE users SET is_super_admin = 1 WHERE username = ?", (SUPER_ADMIN_USERNAME,))
+    conn.execute("UPDATE users SET is_disabled = 0 WHERE username = ?", (SUPER_ADMIN_USERNAME,))
+
+    sub_count = conn.execute(
+      "SELECT COUNT(1) AS c FROM subscriptions WHERE user_id = ? AND deleted_at IS NULL",
+      (user_id,),
+    ).fetchone()["c"]
+    if int(sub_count or 0) == 0:
+      seed_demo_subscriptions_for_user(conn, user_id)
 
     conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso(),))
 
 
 def normalize_currency(value):
   code = (value or "CNY").strip().upper()
-  if code not in CURRENCY_CODES:
+  if not code or len(code) < 3 or len(code) > 10:
+    return None
+  if not all(ch.isalnum() for ch in code):
     return None
   return code
 
@@ -265,39 +328,182 @@ def row_to_json(row):
   }
 
 
-def fetch_live_usd_rates():
-  symbols = sorted([c for c in CURRENCY_CODES if c != "USD"])
-  symbol_query = ",".join(symbols)
-  url = f"https://api.frankfurter.app/latest?from=USD&to={symbol_query}"
-  with urlopen(url, timeout=6) as resp:
-    payload = json.loads(resp.read().decode("utf-8"))
+def row_to_share_json(row):
+  return {
+    "id": row["id"],
+    "name": row["name"],
+    "iconUrl": row["icon_url"] or "",
+    "price": row["price"],
+    "currency": row["currency"],
+    "cycle": row["cycle"],
+  }
 
+
+def fetch_secondary_usd_rates(codes):
+  if not codes:
+    return {}
+  symbol_query = ",".join(sorted(set(codes)))
+  url = f"https://api.frankfurter.app/latest?from=USD&to={symbol_query}"
+  payload = None
+  try:
+    req = Request(url, headers={"User-Agent": "Subly/1.0 (+https://localhost)"})
+    with urlopen(req, timeout=6) as resp:
+      payload = json.loads(resp.read().decode("utf-8"))
+  except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+    try:
+      raw = subprocess.check_output(["curl", "-s", url], timeout=8)
+      payload = json.loads(raw.decode("utf-8"))
+    except (subprocess.SubprocessError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
+      raise URLError(str(err)) from err
+
+  rates = payload.get("rates", {})
+  result = {}
+  for code in codes:
+    if code in rates and rates[code] is not None:
+      result[code] = float(rates[code])
+  return result
+
+
+def fetch_open_er_rates():
+  url = "https://open.er-api.com/v6/latest/USD"
+  payload = None
+  try:
+    with urlopen(url, timeout=6) as resp:
+      payload = json.loads(resp.read().decode("utf-8"))
+  except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+    try:
+      raw = subprocess.check_output(["curl", "-s", url], timeout=8)
+      payload = json.loads(raw.decode("utf-8"))
+    except (subprocess.SubprocessError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
+      raise URLError(str(err)) from err
+  rates = payload.get("rates", {})
+  if not isinstance(rates, dict):
+    raise ValueError("invalid open-er-api payload")
+  clean = {}
+  for code, value in rates.items():
+    c = str(code).strip().upper()
+    if not c:
+      continue
+    try:
+      clean[c] = float(value)
+    except (TypeError, ValueError):
+      continue
+  clean["USD"] = 1.0
+  return clean
+
+
+def get_open_er_rates():
+  now = time.time()
+  if OPEN_ER_CACHE["loaded_at"] and (now - OPEN_ER_CACHE["loaded_at"] < FX_CACHE_TTL_SECONDS):
+    return OPEN_ER_CACHE["rates"]
+  rates = fetch_open_er_rates()
+  OPEN_ER_CACHE["loaded_at"] = now
+  OPEN_ER_CACHE["rates"] = rates
+  return rates
+
+
+def fetch_currency_names():
+  url = "https://openexchangerates.org/api/currencies.json"
+  payload = None
+  try:
+    with urlopen(url, timeout=6) as resp:
+      payload = json.loads(resp.read().decode("utf-8"))
+  except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+    try:
+      raw = subprocess.check_output(["curl", "-s", url], timeout=8)
+      payload = json.loads(raw.decode("utf-8"))
+    except (subprocess.SubprocessError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
+      raise URLError(str(err)) from err
+  if not isinstance(payload, dict):
+    raise ValueError("invalid currency names payload")
+  result = {}
+  for code, name in payload.items():
+    c = str(code or "").strip().upper()
+    n = str(name or "").strip()
+    if not c or not n:
+      continue
+    result[c] = n
+  return result
+
+
+def get_currency_names():
+  now = time.time()
+  if CURRENCY_NAME_CACHE["loaded_at"] and (now - CURRENCY_NAME_CACHE["loaded_at"] < 24 * 60 * 60):
+    return CURRENCY_NAME_CACHE["names"]
+  names = fetch_currency_names()
+  CURRENCY_NAME_CACHE["loaded_at"] = now
+  CURRENCY_NAME_CACHE["names"] = names
+  return names
+
+
+def fetch_live_usd_rates():
+  payload_rates = get_open_er_rates()
+  frankfurter_payload_rates = {}
+  try:
+    symbols = sorted([c for c in CURRENCY_CODES if c != "USD"])
+    symbol_query = ",".join(symbols)
+    url = f"https://api.frankfurter.app/latest?from=USD&to={symbol_query}"
+    req = Request(url, headers={"User-Agent": "Subly/1.0 (+https://localhost)"})
+    with urlopen(req, timeout=6) as resp:
+      payload = json.loads(resp.read().decode("utf-8"))
+      frankfurter_payload_rates = payload.get("rates", {}) if isinstance(payload, dict) else {}
+  except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+    frankfurter_payload_rates = {}
   rates = {"USD": 1.0}
-  payload_rates = payload.get("rates", {})
+  missing_codes = []
   for code in CURRENCY_CODES:
     if code == "USD":
       continue
     val = payload_rates.get(code)
     if val is None:
-      raise ValueError(f"missing rate for {code}")
+      val = frankfurter_payload_rates.get(code)
+    if val is None:
+      missing_codes.append(code)
+      rates[code] = float(FALLBACK_USD_RATES[code])
+      continue
     rates[code] = float(val)
+
+  if missing_codes:
+    secondary = {}
+    try:
+      secondary = fetch_secondary_usd_rates(missing_codes)
+    except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+      secondary = {}
+    if secondary:
+      unresolved = []
+      for code in missing_codes:
+        if code in secondary:
+          rates[code] = float(secondary[code])
+        else:
+          unresolved.append(code)
+      missing_codes = unresolved
+
+  if not missing_codes and any(code not in payload_rates for code in CURRENCY_CODES if code != "USD"):
+    source = "open-er-api+frankfurter"
+  elif missing_codes:
+    source = "open-er-api_partial"
+  else:
+    source = "open-er-api"
+
   return {
-    "updated_at": payload.get("date") or datetime.now(UTC).date().isoformat(),
-    "source": "frankfurter",
+    "updated_at": datetime.now(UTC).date().isoformat(),
+    "source": source,
     "rates": rates,
+    "missing_codes": missing_codes,
   }
 
 
 def get_usd_rates():
   now = time.time()
   cache_age = now - FX_CACHE["loaded_at"]
-  if FX_CACHE["loaded_at"] and cache_age < FX_CACHE_TTL_SECONDS:
+  if FX_CACHE["loaded_at"] and str(FX_CACHE["source"]) != "fallback" and cache_age < FX_CACHE_TTL_SECONDS:
     return {
       "base": "USD",
       "rates": FX_CACHE["rates"],
       "updatedAt": FX_CACHE["updated_at"],
       "source": FX_CACHE["source"],
-      "stale": False,
+      "stale": bool(FX_CACHE.get("missing_codes")),
+      "missingCodes": FX_CACHE.get("missing_codes", []),
     }
 
   try:
@@ -306,26 +512,30 @@ def get_usd_rates():
     FX_CACHE["updated_at"] = fresh["updated_at"]
     FX_CACHE["source"] = fresh["source"]
     FX_CACHE["rates"] = fresh["rates"]
+    FX_CACHE["missing_codes"] = fresh.get("missing_codes", [])
     return {
       "base": "USD",
       "rates": FX_CACHE["rates"],
       "updatedAt": FX_CACHE["updated_at"],
       "source": FX_CACHE["source"],
-      "stale": False,
+      "stale": bool(FX_CACHE.get("missing_codes")),
+      "missingCodes": FX_CACHE.get("missing_codes", []),
     }
   except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
-    stale = FX_CACHE["loaded_at"] > 0
-    if not stale:
+    has_cache = FX_CACHE["loaded_at"] > 0
+    if not has_cache:
       FX_CACHE["loaded_at"] = now
       FX_CACHE["updated_at"] = datetime.now(UTC).date().isoformat()
       FX_CACHE["source"] = "fallback"
       FX_CACHE["rates"] = FALLBACK_USD_RATES.copy()
+      FX_CACHE["missing_codes"] = sorted(CURRENCY_CODES)
     return {
       "base": "USD",
       "rates": FX_CACHE["rates"],
       "updatedAt": FX_CACHE["updated_at"],
       "source": FX_CACHE["source"],
       "stale": True,
+      "missingCodes": FX_CACHE.get("missing_codes", []),
     }
 
 
@@ -349,6 +559,11 @@ class Handler(BaseHTTPRequestHandler):
     self.end_headers()
     self.wfile.write(body)
 
+  def _send_no_content(self):
+    self.send_response(204)
+    self.send_header("Content-Length", "0")
+    self.end_headers()
+
   def _read_json_body(self):
     length = int(self.headers.get("Content-Length", 0))
     raw = self.rfile.read(length) if length > 0 else b"{}"
@@ -367,7 +582,7 @@ class Handler(BaseHTTPRequestHandler):
     with db_conn() as conn:
       row = conn.execute(
         """
-        SELECT u.id, u.username, s.expires_at
+        SELECT u.id, u.username, u.is_super_admin, u.is_disabled, s.expires_at
         FROM sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token = ?
@@ -379,12 +594,30 @@ class Handler(BaseHTTPRequestHandler):
       if parse_iso(row["expires_at"]) <= now_dt():
         conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
         return None
-      return {"id": row["id"], "username": row["username"], "token": token}
+      if bool(row["is_disabled"]):
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        return None
+      return {
+        "id": row["id"],
+        "username": row["username"],
+        "isSuperAdmin": bool(row["is_super_admin"]),
+        "isDisabled": bool(row["is_disabled"]),
+        "token": token,
+      }
 
   def _require_auth(self):
     user = self._auth_user()
     if not user:
       self._send_json(401, {"error": "Unauthorized"})
+      return None
+    return user
+
+  def _require_super_admin(self):
+    user = self._require_auth()
+    if not user:
+      return None
+    if not user.get("isSuperAdmin"):
+      self._send_json(403, {"error": "Super admin only"})
       return None
     return user
 
@@ -397,6 +630,9 @@ class Handler(BaseHTTPRequestHandler):
     if len(password) < 6:
       self._send_json(400, {"error": "Password too short"})
       return
+    if username.lower() == SUPER_ADMIN_USERNAME.lower():
+      self._send_json(403, {"error": "Super admin username is reserved"})
+      return
 
     user_id = secrets.token_hex(8)
     salt_hex, pass_hex = create_password_hash(password)
@@ -406,8 +642,8 @@ class Handler(BaseHTTPRequestHandler):
     try:
       with db_conn() as conn:
         conn.execute(
-          "INSERT INTO users (id, username, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-          (user_id, username, salt_hex, pass_hex, created),
+          "INSERT INTO users (id, username, is_super_admin, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          (user_id, username, 0, salt_hex, pass_hex, created),
         )
         conn.execute(
           "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
@@ -418,18 +654,21 @@ class Handler(BaseHTTPRequestHandler):
       self._send_json(409, {"error": "Username already exists"})
       return
 
-    self._send_json(201, {"token": token, "user": {"id": user_id, "username": username}})
+    self._send_json(201, {"token": token, "user": {"id": user_id, "username": username, "isSuperAdmin": False}})
 
   def _handle_auth_login(self, payload):
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""
     with db_conn() as conn:
       user = conn.execute(
-        "SELECT id, username, password_salt, password_hash FROM users WHERE username = ?",
+        "SELECT id, username, is_super_admin, is_disabled, password_salt, password_hash FROM users WHERE username = ?",
         (username,),
       ).fetchone()
       if not user:
         self._send_json(401, {"error": "Invalid credentials"})
+        return
+      if bool(user["is_disabled"]):
+        self._send_json(403, {"error": "Account disabled"})
         return
       if not verify_password(password, user["password_salt"], user["password_hash"]):
         self._send_json(401, {"error": "Invalid credentials"})
@@ -441,7 +680,13 @@ class Handler(BaseHTTPRequestHandler):
         "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         (token, user["id"], created, expires),
       )
-    self._send_json(200, {"token": token, "user": {"id": user["id"], "username": user["username"]}})
+    self._send_json(
+      200,
+      {
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "isSuperAdmin": bool(user["is_super_admin"])},
+      },
+    )
 
   def _handle_auth_change_password(self, user, payload):
     old_password = payload.get("oldPassword") or ""
@@ -474,11 +719,56 @@ class Handler(BaseHTTPRequestHandler):
     path = parsed.path
     query = parse_qs(parsed.query)
 
+    # Browser/DevTools probing endpoints; silence noisy 404s in local console.
+    if path in {"/.well-known/appspecific/com.chrome.devtools.json", "/favicon.ico"}:
+      self._send_no_content()
+      return
+
     if path == "/api/auth/me":
       user = self._require_auth()
       if not user:
         return
-      self._send_json(200, {"user": {"id": user["id"], "username": user["username"]}})
+      self._send_json(
+        200,
+        {"user": {"id": user["id"], "username": user["username"], "isSuperAdmin": bool(user.get("isSuperAdmin"))}},
+      )
+      return
+
+    if path == "/api/admin/users":
+      user = self._require_super_admin()
+      if not user:
+        return
+      with db_conn() as conn:
+        rows = conn.execute(
+          """
+          SELECT
+            u.id,
+            u.username,
+            u.is_super_admin,
+            u.is_disabled,
+            u.created_at,
+            (
+              SELECT COUNT(1) FROM subscriptions s
+              WHERE s.user_id = u.id AND s.deleted_at IS NULL
+            ) AS subscription_count
+          FROM users u
+          ORDER BY u.created_at DESC
+          """
+        ).fetchall()
+      self._send_json(
+        200,
+        [
+          {
+            "id": r["id"],
+            "username": r["username"],
+            "isSuperAdmin": bool(r["is_super_admin"]),
+            "isDisabled": bool(r["is_disabled"]),
+            "createdAt": r["created_at"],
+            "subscriptionCount": int(r["subscription_count"] or 0),
+          }
+          for r in rows
+        ],
+      )
       return
 
     if path == "/api/subscriptions":
@@ -491,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
           SELECT id, name, category, price, currency, icon_url, cycle, next_payment_date, status, note, created_at, updated_at
           , tags
           FROM subscriptions
-          WHERE user_id = ?
+          WHERE user_id = ? AND deleted_at IS NULL
           ORDER BY next_payment_date ASC
           """,
           (user["id"],),
@@ -506,15 +796,95 @@ class Handler(BaseHTTPRequestHandler):
       self._send_json(200, rates_payload)
       return
 
+    if path == "/api/currencies":
+      try:
+        rates = get_open_er_rates()
+        codes = sorted(rates.keys())
+      except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        codes = sorted(CURRENCY_CODES)
+      try:
+        names = get_currency_names()
+      except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        names = {}
+      items = [{"code": code, "name": names.get(code, code)} for code in codes]
+      self._send_json(200, {"codes": codes, "items": items})
+      return
+
+    if path == "/api/currency-rate":
+      code = (query.get("code", [""])[0] or "").strip().upper()
+      if not code:
+        self._send_json(400, {"error": "Missing code"})
+        return
+      if not code.isalnum() or len(code) < 3 or len(code) > 10:
+        self._send_json(400, {"error": "Invalid code"})
+        return
+      try:
+        rates = get_open_er_rates()
+      except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        rates = {}
+      if code in rates:
+        self._send_json(200, {"code": code, "usdRate": float(rates[code]), "source": "open-er-api"})
+        return
+      fallback = FALLBACK_USD_RATES.get(code)
+      if fallback is not None:
+        self._send_json(200, {"code": code, "usdRate": float(fallback), "source": "fallback"})
+        return
+      self._send_json(404, {"error": "Rate not found"})
+      return
+
+    if path.startswith("/api/share/"):
+      parts = path.split("/")
+      if len(parts) != 4 or not parts[3]:
+        self.send_error(404, "Not Found")
+        return
+      token = parts[3]
+      with db_conn() as conn:
+        owner = conn.execute(
+          """
+          SELECT u.id, u.username
+          FROM share_links sl
+          JOIN users u ON u.id = sl.user_id
+          WHERE sl.token = ?
+          """,
+          (token,),
+        ).fetchone()
+        if not owner:
+          self._send_json(404, {"error": "Share link not found"})
+          return
+        rows = conn.execute(
+          """
+          SELECT id, name, category, price, currency, icon_url, cycle, next_payment_date, status, note, created_at, updated_at, tags
+          FROM subscriptions
+          WHERE user_id = ? AND deleted_at IS NULL
+          ORDER BY next_payment_date ASC
+          """,
+          (owner["id"],),
+        ).fetchall()
+      self._send_json(
+        200,
+        {
+          "owner": {"username": owner["username"]},
+          "subscriptions": [row_to_share_json(r) for r in rows],
+          "sharedAt": now_iso(),
+        },
+      )
+      return
+
     static_map = {
       "/": ("index.html", "text/html; charset=utf-8"),
       "/index.html": ("index.html", "text/html; charset=utf-8"),
       "/app.js": ("app.js", "application/javascript; charset=utf-8"),
       "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+      "/share.html": ("share.html", "text/html; charset=utf-8"),
+      "/share.js": ("share.js", "application/javascript; charset=utf-8"),
     }
     if path in static_map:
       rel, ctype = static_map[path]
       self._send_text_file(BASE_DIR / rel, ctype)
+      return
+
+    if path.startswith("/share/"):
+      self._send_text_file(BASE_DIR / "share.html", "text/html; charset=utf-8")
       return
 
     if path.startswith("/assets/"):
@@ -570,6 +940,84 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(400, {"error": "Invalid JSON"})
         return
       self._handle_auth_change_password(user, payload)
+      return
+
+    if parsed.path == "/api/share-links":
+      user = self._require_auth()
+      if not user:
+        return
+      token = secrets.token_urlsafe(18)
+      created = now_iso()
+      with db_conn() as conn:
+        conn.execute(
+          """
+          INSERT INTO share_links (token, user_id, created_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(user_id) DO UPDATE SET
+            token = excluded.token,
+            created_at = excluded.created_at
+          """,
+          (token, user["id"], created),
+        )
+      self._send_json(201, {"token": token, "urlPath": f"/share/{token}"})
+      return
+
+    if parsed.path == "/api/admin/users/status":
+      user = self._require_super_admin()
+      if not user:
+        return
+      payload = self._read_json_body()
+      if payload is None:
+        self._send_json(400, {"error": "Invalid JSON"})
+        return
+      target_user_id = str(payload.get("userId") or "").strip()
+      raw_disabled = payload.get("disabled")
+      if not isinstance(raw_disabled, bool):
+        self._send_json(400, {"error": "disabled must be boolean"})
+        return
+      disabled = raw_disabled
+      if not target_user_id:
+        self._send_json(400, {"error": "Missing userId"})
+        return
+      if target_user_id == user["id"]:
+        self._send_json(400, {"error": "Cannot change your own status"})
+        return
+      with db_conn() as conn:
+        target = conn.execute(
+          "SELECT id, username, is_super_admin FROM users WHERE id = ?",
+          (target_user_id,),
+        ).fetchone()
+        if not target:
+          self._send_json(404, {"error": "User not found"})
+          return
+        if bool(target["is_super_admin"]):
+          self._send_json(400, {"error": "Cannot change super admin"})
+          return
+        conn.execute(
+          "UPDATE users SET is_disabled = ? WHERE id = ?",
+          (1 if disabled else 0, target_user_id),
+        )
+        if disabled:
+          conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_user_id,))
+      self._send_json(200, {"ok": True})
+      return
+
+    if parsed.path == "/api/subscriptions/reset":
+      user = self._require_auth()
+      if not user:
+        return
+      ts = now_iso()
+      with db_conn() as conn:
+        conn.execute(
+          """
+          UPDATE subscriptions
+          SET deleted_at = ?, updated_at = ?
+          WHERE user_id = ? AND deleted_at IS NULL
+          """,
+          (ts, ts, user["id"]),
+        )
+        seed_demo_subscriptions_for_user(conn, user["id"])
+      self._send_json(200, {"ok": True})
       return
 
     if parsed.path != "/api/subscriptions":
@@ -651,7 +1099,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         UPDATE subscriptions
         SET name = ?, category = ?, price = ?, currency = ?, icon_url = ?, cycle = ?, next_payment_date = ?, status = ?, note = ?, tags = ?, updated_at = ?
-        WHERE id = ? AND user_id = ?
+        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
         """,
         (
           normalized["name"],
@@ -687,8 +1135,12 @@ class Handler(BaseHTTPRequestHandler):
       return
 
     sub_id = parts[3]
+    ts = now_iso()
     with db_conn() as conn:
-      cur = conn.execute("DELETE FROM subscriptions WHERE id = ? AND user_id = ?", (sub_id, user["id"]))
+      cur = conn.execute(
+        "UPDATE subscriptions SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        (ts, ts, sub_id, user["id"]),
+      )
     if cur.rowcount == 0:
       self._send_json(404, {"error": "Not found"})
       return
@@ -697,7 +1149,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
   init_db()
-  host = "127.0.0.1"
+  host = os.environ.get("HOST", "127.0.0.1")
   port = int(os.environ.get("PORT", "5173"))
   server = ThreadingHTTPServer((host, port), Handler)
   print(f"Serving on http://{host}:{port}")

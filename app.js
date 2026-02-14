@@ -1,5 +1,10 @@
 const API_BASE = "/api/subscriptions";
 const RATES_API = "/api/rates?base=USD";
+const SHARE_API = "/api/share-links";
+const ADMIN_USERS_API = "/api/admin/users";
+const ADMIN_USER_STATUS_API = "/api/admin/users/status";
+const CURRENCY_CATALOG_API = "/api/currencies";
+const CURRENCY_RATE_API = "/api/currency-rate";
 const PREF_KEY = "subly_base_currency_v1";
 const SETTINGS_KEY = "subly_settings_v1";
 const AUTH_TOKEN_KEY = "subly_auth_token_v1";
@@ -27,6 +32,7 @@ const CYCLE_TO_MONTHLY_FACTOR = {
 
 const CURRENCIES = [
   { code: "CNY", label: "人民币 (CNY)", symbol: "¥" },
+  { code: "TWD", label: "新台币 (TWD)", symbol: "NT$" },
   { code: "USD", label: "美元 (USD)", symbol: "$" },
   { code: "EUR", label: "欧元 (EUR)", symbol: "€" },
   { code: "GBP", label: "英镑 (GBP)", symbol: "£" },
@@ -37,6 +43,37 @@ const CURRENCIES = [
   { code: "CAD", label: "加元 (CAD)", symbol: "C$" },
   { code: "PHP", label: "菲律宾比索 (PHP)", symbol: "₱" },
 ];
+const CURRENCY_SYMBOL_OVERRIDES = {
+  AED: "د.إ",
+  ARS: "$",
+  BRL: "R$",
+  CHF: "Fr",
+  CLP: "$",
+  COP: "$",
+  CZK: "Kč",
+  DKK: "kr",
+  HUF: "Ft",
+  IDR: "Rp",
+  ILS: "₪",
+  INR: "₹",
+  KRW: "₩",
+  KZT: "₸",
+  MXN: "$",
+  MYR: "RM",
+  NGN: "₦",
+  NOK: "kr",
+  NZD: "NZ$",
+  PLN: "zł",
+  QAR: "ر.ق",
+  RUB: "₽",
+  SAR: "﷼",
+  SEK: "kr",
+  THB: "฿",
+  TRY: "₺",
+  UAH: "₴",
+  VND: "₫",
+  ZAR: "R",
+};
 
 const DEFAULT_CATEGORIES = [
   "娱乐",
@@ -54,6 +91,7 @@ const DEFAULT_CATEGORIES = [
 const FALLBACK_USD_RATES = {
   USD: 1,
   CNY: 7.2,
+  TWD: 32.0,
   EUR: 0.93,
   GBP: 0.79,
   JPY: 150,
@@ -65,7 +103,7 @@ const FALLBACK_USD_RATES = {
 };
 
 const SERVICE_ICON_RULES = [
-  { keywords: ["chatgpt", "openai"], icon: "https://cdn.simpleicons.org/openai/10A37F", bg: "#e8fbf5" },
+  { keywords: ["chatgpt", "openai"], icon: "https://cdn.jsdelivr.net/npm/simple-icons/icons/openai.svg", bg: "#e8fbf5" },
   { keywords: ["spotify"], icon: "https://cdn.simpleicons.org/spotify/1DB954", bg: "#e8fff2" },
   { keywords: ["youtube"], icon: "https://cdn.simpleicons.org/youtube/FF0000", bg: "#fff1f1" },
   { keywords: ["netflix"], icon: "https://cdn.simpleicons.org/netflix/E50914", bg: "#fff1f3" },
@@ -73,11 +111,11 @@ const SERVICE_ICON_RULES = [
   { keywords: ["apple music", "music"], icon: "https://cdn.simpleicons.org/applemusic/FA243C", bg: "#fff1f3" },
   { keywords: ["icloud"], icon: "https://cdn.simpleicons.org/icloud/3693F3", bg: "#edf5ff" },
   { keywords: ["google one", "google"], icon: "https://cdn.simpleicons.org/google/4285F4", bg: "#edf5ff" },
-  { keywords: ["microsoft 365", "microsoft", "office"], icon: "https://cdn.simpleicons.org/microsoft/5E5E5E", bg: "#f4f4f4" },
+  { keywords: ["microsoft 365", "microsoft", "office"], icon: "https://cdn.jsdelivr.net/npm/simple-icons/icons/microsoft.svg", bg: "#f4f4f4" },
   { keywords: ["github"], icon: "https://cdn.simpleicons.org/github/181717", bg: "#f2f4f8" },
   { keywords: ["notion"], icon: "https://cdn.simpleicons.org/notion/000000", bg: "#f4f4f6" },
   { keywords: ["figma"], icon: "https://cdn.simpleicons.org/figma/F24E1E", bg: "#fff2ef" },
-  { keywords: ["canva"], icon: "https://cdn.simpleicons.org/canva/00C4CC", bg: "#ecffff" },
+  { keywords: ["canva"], icon: "https://cdn.jsdelivr.net/npm/simple-icons/icons/canva.svg", bg: "#ecffff" },
   { keywords: ["dropbox"], icon: "https://cdn.simpleicons.org/dropbox/0061FF", bg: "#edf3ff" },
   { keywords: ["aws"], icon: "https://cdn.simpleicons.org/amazonaws/FF9900", bg: "#fff8eb" },
   { keywords: ["cloudflare"], icon: "https://cdn.simpleicons.org/cloudflare/F38020", bg: "#fff3eb" },
@@ -103,13 +141,22 @@ const state = {
   ratesUpdatedAt: "",
   ratesSource: "fallback",
   ratesStale: true,
+  ratesMissingCodes: [],
   settings: {
     rateIntervalMinutes: 10,
     showApprox: true,
     defaultMonths: 6,
+    customCategories: [],
+    customTags: [],
+    customCurrencies: [],
   },
   rateTimerId: null,
+  rateRefreshStatus: "",
+  rateRefreshAt: "",
   autoSettleRunning: false,
+  formTags: [],
+  adminUsers: [],
+  currencyCatalog: [],
 };
 
 const els = {
@@ -134,6 +181,11 @@ const els = {
   categoryCustom: document.getElementById("categoryCustom"),
   price: document.getElementById("price"),
   currency: document.getElementById("currency"),
+  tagSelect: document.getElementById("tagSelect"),
+  addTagToFormBtn: document.getElementById("addTagToFormBtn"),
+  tagInput: document.getElementById("tagInput"),
+  addNewTagBtn: document.getElementById("addNewTagBtn"),
+  tagPreview: document.getElementById("tagPreview"),
   tags: document.getElementById("tags"),
   iconUrl: document.getElementById("iconUrl"),
   cycle: document.getElementById("cycle"),
@@ -156,6 +208,7 @@ const els = {
   futureMonthsRangeSelect: document.getElementById("futureMonthsRangeSelect"),
   pastMonthsRangeSelect: document.getElementById("pastMonthsRangeSelect"),
   refreshRatesBtn: document.getElementById("refreshRatesBtn"),
+  shareListBtn: document.getElementById("shareListBtn"),
   rateInfo: document.getElementById("rateInfo"),
   navLinks: Array.from(document.querySelectorAll(".side-nav [data-page-target]")),
   dashboardPage: document.getElementById("dashboardPage"),
@@ -163,16 +216,33 @@ const els = {
   overviewFeature: document.getElementById("overviewFeature"),
   listFeature: document.getElementById("listFeature"),
   reportsFeature: document.getElementById("reportsFeature"),
+  categoriesFeature: document.getElementById("categoriesFeature"),
+  tagsFeature: document.getElementById("tagsFeature"),
+  usersFeature: document.getElementById("usersFeature"),
+  newCategoryInput: document.getElementById("newCategoryInput"),
+  addCategoryBtn: document.getElementById("addCategoryBtn"),
+  categoryManageList: document.getElementById("categoryManageList"),
+  newTagInput: document.getElementById("newTagInput"),
+  addTagBtn: document.getElementById("addTagBtn"),
+  tagManageList: document.getElementById("tagManageList"),
+  customCurrencyCatalog: document.getElementById("customCurrencyCatalog"),
+  addCustomCurrencyBtn: document.getElementById("addCustomCurrencyBtn"),
+  customCurrencyList: document.getElementById("customCurrencyList"),
   settingsForm: document.getElementById("settingsForm"),
   settingsBaseCurrency: document.getElementById("settingsBaseCurrency"),
   settingsRateInterval: document.getElementById("settingsRateInterval"),
   settingsDefaultMonths: document.getElementById("settingsDefaultMonths"),
   settingsShowApprox: document.getElementById("settingsShowApprox"),
+  resetDataBtn: document.getElementById("resetDataBtn"),
+  adminUsersNavBtn: document.getElementById("adminUsersNavBtn"),
+  refreshAdminUsersBtn: document.getElementById("refreshAdminUsersBtn"),
+  adminUsersList: document.getElementById("adminUsersList"),
   passwordForm: document.getElementById("passwordForm"),
   currentPassword: document.getElementById("currentPassword"),
   newPassword: document.getElementById("newPassword"),
   confirmPassword: document.getElementById("confirmPassword"),
   passwordMessage: document.getElementById("passwordMessage"),
+  rowHoverCard: document.getElementById("rowHoverCard"),
 };
 
 function uid() {
@@ -186,9 +256,13 @@ function setAuthMessage(text) {
 function showAuthMode(mode) {
   const login = mode !== "register";
   els.loginForm.classList.toggle("hidden", !login);
-  els.registerForm.classList.toggle("hidden", login);
+  if (els.registerForm) {
+    els.registerForm.classList.toggle("hidden", login);
+  }
   els.showLoginBtn.classList.toggle("primary", login);
-  els.showRegisterBtn.classList.toggle("primary", !login);
+  if (els.showRegisterBtn) {
+    els.showRegisterBtn.classList.toggle("primary", !login);
+  }
   setAuthMessage("");
 }
 
@@ -219,12 +293,14 @@ function daysDiff(from, to) {
 }
 
 function currencyMeta(code) {
-  return CURRENCIES.find((c) => c.code === code) || CURRENCIES[0];
+  return getCurrencyList().find((c) => c.code === code) || CURRENCIES[0];
 }
 
 function formatMoney(value, code = "CNY") {
-  const symbol = currencyMeta(code).symbol;
-  return `${symbol}${Number(value).toFixed(2)} ${code}`;
+  const meta = currencyMeta(code);
+  const amount = Number(value).toFixed(2);
+  if (!meta.symbol || meta.symbol.toUpperCase() === String(code || "").toUpperCase()) return `${amount} ${code}`;
+  return `${meta.symbol}${amount}`;
 }
 
 function formatDate(dateStr) {
@@ -282,6 +358,67 @@ function tagsToInputValue(tags) {
   return normalizeTags(tags).join(", ");
 }
 
+function getKnownTags() {
+  const usedTags = state.subscriptions.flatMap((s) => normalizeTags(s.tags));
+  return Array.from(new Set([...state.settings.customTags, ...usedTags])).sort((a, b) =>
+    a.localeCompare(b, "zh-CN"),
+  );
+}
+
+function renderTagSelectOptions() {
+  const current = els.tagSelect.value;
+  const options = getKnownTags();
+  els.tagSelect.innerHTML = [
+    `<option value="">选择已有标签</option>`,
+    ...options.map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`),
+  ].join("");
+  if (options.includes(current)) els.tagSelect.value = current;
+}
+
+function setFormTags(tags) {
+  state.formTags = normalizeTags(tags);
+  els.tags.value = tagsToInputValue(state.formTags);
+  els.tagPreview.innerHTML = state.formTags.length
+    ? state.formTags
+        .map(
+          (tag) =>
+            `<span class="manage-chip">${escapeHtml(tag)}<button type="button" class="manage-remove" data-remove-form-tag="${escapeHtml(
+              tag,
+            )}" title="删除标签">×</button></span>`,
+        )
+        .join("")
+    : `<span class="manage-empty">暂无标签</span>`;
+}
+
+function addFormTag(value) {
+  const tag = String(value || "").trim();
+  if (!tag) return;
+  setFormTags([...state.formTags, tag]);
+  if (!state.settings.customTags.some((v) => v.toLowerCase() === tag.toLowerCase())) {
+    state.settings.customTags = normalizeManageItems([...state.settings.customTags, tag]);
+    saveSettings();
+    renderManageSections();
+    renderTagSelectOptions();
+  }
+}
+
+function normalizeManageItems(value) {
+  if (Array.isArray(value)) {
+    const seen = new Set();
+    return value
+      .map((v) => String(v || "").trim())
+      .filter((v) => {
+        if (!v) return false;
+        const key = v.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 100);
+  }
+  return normalizeManageItems(String(value || "").split(/[,\uFF0C]/));
+}
+
 function iconFromCategory(categoryText) {
   const category = (categoryText || "").toLowerCase();
   for (const item of CATEGORY_ICON_HINTS) {
@@ -321,7 +458,10 @@ function serviceIconMeta(sub) {
 }
 
 function rateFor(code) {
-  return Number(state.usdRates[code] || FALLBACK_USD_RATES[code] || 1);
+  if (state.usdRates[code] !== undefined) return Number(state.usdRates[code]);
+  const custom = (state.settings.customCurrencies || []).find((item) => item.code === code);
+  if (custom && Number(custom.usdRate) > 0) return Number(custom.usdRate);
+  return Number(FALLBACK_USD_RATES[code] || 1);
 }
 
 function convertCurrency(value, from, to) {
@@ -410,19 +550,262 @@ function toMonthlyCost(sub) {
   return baseValue * factor;
 }
 
+function getCurrencyList() {
+  const map = new Map(CURRENCIES.map((item) => [item.code, { ...item }]));
+  for (const item of state.settings.customCurrencies || []) {
+    if (!item || !item.code) continue;
+    if (map.has(item.code)) continue;
+    const baseName = String(item.label || getCurrencyNameZh(item.code, item.code))
+      .replace(/\s*\([A-Z0-9]{3,10}\)\s*$/i, "")
+      .trim();
+    map.set(item.code, {
+      code: item.code,
+      label: `${baseName || item.code} (${item.code})`,
+      symbol: item.symbol || inferCurrencySymbol(item.code),
+    });
+  }
+  for (const sub of state.subscriptions || []) {
+    const code = String(sub.currency || "").trim().toUpperCase();
+    if (!code || map.has(code)) continue;
+    map.set(code, { code, label: `${code} (历史)`, symbol: "" });
+  }
+  const base = CURRENCIES.map((c) => map.get(c.code)).filter(Boolean);
+  const extras = Array.from(map.values())
+    .filter((c) => !CURRENCIES.some((b) => b.code === c.code))
+    .sort((a, b) => a.code.localeCompare(b.code));
+  return [...base, ...extras];
+}
+
 function renderCurrencyOptions() {
-  const options = CURRENCIES.map((c) => `<option value="${c.code}">${c.label}</option>`).join("");
+  const currencyList = getCurrencyList();
+  const options = currencyList
+    .map((c) => {
+      const symbol = String(c.symbol || "").trim();
+      const suffix = symbol && symbol.toUpperCase() !== c.code ? ` · ${symbol}` : "";
+      return `<option value="${c.code}">${c.label}${suffix}</option>`;
+    })
+    .join("");
   els.currency.innerHTML = options;
   els.baseCurrency.innerHTML = options;
   els.settingsBaseCurrency.innerHTML = options;
+  if (!currencyList.some((c) => c.code === state.baseCurrency)) {
+    state.baseCurrency = "CNY";
+  }
   els.baseCurrency.value = state.baseCurrency;
   els.settingsBaseCurrency.value = state.baseCurrency;
+}
+
+function normalizeCustomCurrencies(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set(CURRENCIES.map((c) => c.code.toLowerCase()));
+  const output = [];
+  for (const item of value) {
+    const code = String(item?.code || "").trim().toUpperCase();
+    const symbol = String(item?.symbol || "").trim();
+    const label = String(item?.label || "").trim();
+    const usdRate = Number(item?.usdRate);
+    if (!/^[A-Z0-9]{3,10}$/.test(code)) continue;
+    if (!Number.isFinite(usdRate) || usdRate <= 0) continue;
+    const key = code.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const normalizedSymbol = symbol || inferCurrencySymbol(code);
+    output.push({
+      code,
+      symbol: String(normalizedSymbol || "").slice(0, 8),
+      label: label || `${code} (自定义)`,
+      usdRate: Number(usdRate.toFixed(6)),
+    });
+  }
+  return output.slice(0, 30);
+}
+
+function inferCurrencySymbol(code) {
+  const normalizedCode = String(code || "").toUpperCase();
+  const base = CURRENCIES.find((c) => c.code === normalizedCode);
+  if (base && base.symbol) return base.symbol;
+  const override = CURRENCY_SYMBOL_OVERRIDES[normalizedCode];
+  if (override) return override;
+  try {
+    const locales = ["zh-CN", "en", "th-TH", "fr-CH", "de-CH", "ja-JP", "ar"];
+    for (const locale of locales) {
+      const parts = new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency: normalizedCode,
+        currencyDisplay: "narrowSymbol",
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).formatToParts(1);
+      const symbolPart = parts.find((p) => p.type === "currency")?.value || "";
+      const symbol = String(symbolPart).trim();
+      if (symbol && symbol.toUpperCase() !== normalizedCode) return symbol;
+    }
+  } catch (_err) {
+    // ignore
+  }
+  return normalizedCode;
+}
+
+function getCurrencyNameZh(code, fallback = "") {
+  const c = String(code || "").trim().toUpperCase();
+  if (!c) return fallback || "";
+  try {
+    const display = new Intl.DisplayNames(["zh-CN"], { type: "currency" });
+    const name = display.of(c);
+    if (name && name !== c) return name;
+  } catch (_err) {
+    // ignore
+  }
+  return fallback || c;
+}
+
+function renderCurrencyCatalogOptions() {
+  if (!els.customCurrencyCatalog) return;
+  const exists = new Set(getCurrencyList().map((item) => item.code));
+  const options = (state.currencyCatalog || [])
+    .filter((item) => item && item.code && !exists.has(item.code))
+    .map((item) => {
+      const symbol = inferCurrencySymbol(item.code);
+      const symbolText = symbol && symbol !== item.code ? ` · ${symbol}` : "";
+      const label = `${item.code} - ${getCurrencyNameZh(item.code, item.name || item.code)}${symbolText}`;
+      return `<option value="${escapeHtml(item.code)}">${escapeHtml(label)}</option>`;
+    });
+  els.customCurrencyCatalog.innerHTML = [`<option value="">选择币种...</option>`, ...options].join("");
+}
+
+function renderCustomCurrencyList() {
+  if (!els.customCurrencyList) return;
+  const list = state.settings.customCurrencies || [];
+  if (!list.length) {
+    els.customCurrencyList.innerHTML = `<div class="manage-empty" style="padding:10px 12px;">暂无自定义币种</div>`;
+    return;
+  }
+  els.customCurrencyList.innerHTML = `
+    <div class="admin-users-head">
+      <span>代码</span>
+      <span>符号</span>
+      <span>说明</span>
+      <span>USD 汇率</span>
+      <span>操作</span>
+    </div>
+    ${list
+      .map(
+        (item) => `
+      <div class="admin-user-row">
+        <div class="admin-user-main"><strong>${escapeHtml(item.code)}</strong></div>
+        <div class="admin-col">${escapeHtml(item.symbol || inferCurrencySymbol(item.code) || "-")}</div>
+        <div class="admin-user-meta">${escapeHtml(getCurrencyNameZh(item.code, item.label || "-"))}</div>
+        <div class="admin-user-meta">1 USD = ${escapeHtml(String(item.usdRate))}</div>
+        <div class="admin-user-actions">
+          <button type="button" class="admin-action disable" data-action="remove-custom-currency" data-code="${escapeHtml(item.code)}">删除</button>
+        </div>
+      </div>
+    `,
+      )
+      .join("")}
+  `;
+}
+
+async function fetchCurrencyCatalog() {
+  try {
+    const payload = await request(CURRENCY_CATALOG_API);
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    if (items.length) {
+      state.currencyCatalog = items
+        .map((item) => ({
+          code: String(item?.code || "").trim().toUpperCase(),
+          name: String(item?.name || "").trim(),
+        }))
+        .filter((item) => /^[A-Z0-9]{3,10}$/.test(item.code));
+      return;
+    }
+    const codes = Array.isArray(payload?.codes) ? payload.codes : [];
+    state.currencyCatalog = codes
+      .map((code) => String(code || "").trim().toUpperCase())
+      .filter((code) => /^[A-Z0-9]{3,10}$/.test(code))
+      .map((code) => ({ code, name: "" }));
+  } catch (_err) {
+    state.currencyCatalog = [];
+  }
+}
+
+async function fetchCurrencyRate(code) {
+  const payload = await request(`${CURRENCY_RATE_API}?code=${encodeURIComponent(code)}`);
+  const rate = Number(payload?.usdRate);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error("汇率无效");
+  return rate;
+}
+
+async function refreshCustomCurrencyRates() {
+  const list = state.settings.customCurrencies || [];
+  if (!list.length) return;
+  let changed = false;
+  for (const item of list) {
+    try {
+      const latest = await fetchCurrencyRate(item.code);
+      if (Number(item.usdRate) !== Number(latest)) {
+        item.usdRate = Number(latest.toFixed(6));
+        changed = true;
+      }
+    } catch (_err) {
+      // ignore, keep current value
+    }
+  }
+  if (changed) saveSettings();
+}
+
+function addCustomCurrency() {
+  const code = String(els.customCurrencyCatalog?.value || "").trim().toUpperCase();
+  const selectedMeta = (state.currencyCatalog || []).find((item) => item.code === code);
+  if (!code) {
+    alert("请先选择币种");
+    return;
+  }
+  if (!/^[A-Z0-9]{3,10}$/.test(code)) {
+    alert("币种代码格式不正确（3-10位大写字母或数字）");
+    return;
+  }
+  if (CURRENCIES.some((c) => c.code === code)) {
+    alert("该币种已是系统基础币种");
+    return;
+  }
+  fetchCurrencyRate(code)
+    .then((usdRate) => {
+      const symbol = inferCurrencySymbol(code);
+      const label = getCurrencyNameZh(code, selectedMeta?.name || `${code} Currency`);
+      const next = normalizeCustomCurrencies([
+        ...(state.settings.customCurrencies || []),
+        { code, symbol, usdRate, label },
+      ]);
+      state.settings.customCurrencies = next;
+      if (els.customCurrencyCatalog) els.customCurrencyCatalog.value = "";
+      saveSettings();
+      renderCurrencyOptions();
+      renderCurrencyCatalogOptions();
+      renderCustomCurrencyList();
+      render();
+    })
+    .catch((err) => {
+      alert(`无法获取 ${code} 的汇率: ${err.message}`);
+    });
+}
+
+function removeCustomCurrency(code) {
+  const target = String(code || "").trim().toUpperCase();
+  if (!target) return;
+  state.settings.customCurrencies = (state.settings.customCurrencies || []).filter((item) => item.code !== target);
+  saveSettings();
+  renderCurrencyOptions();
+  renderCurrencyCatalogOptions();
+  renderCustomCurrencyList();
+  render();
 }
 
 function renderCategoryOptions() {
   const uniqueCategories = Array.from(
     new Set([
       ...DEFAULT_CATEGORIES,
+      ...state.settings.customCategories,
       ...state.subscriptions
         .map((s) => (s.category || "").trim())
         .filter((v) => v.length > 0),
@@ -435,6 +818,81 @@ function renderCategoryOptions() {
     `<option value="${CUSTOM_CATEGORY_VALUE}">+ 新增分类</option>`,
   ].join("");
   setCategoryValue(currentCategory);
+}
+
+function renderManageSections() {
+  const usedCategories = state.subscriptions
+    .map((s) => (s.category || "").trim())
+    .filter(Boolean);
+  const categoryItems = Array.from(
+    new Set([...DEFAULT_CATEGORIES, ...state.settings.customCategories, ...usedCategories]),
+  ).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const customCategorySet = new Set(state.settings.customCategories.map((v) => v.toLowerCase()));
+  els.categoryManageList.innerHTML = categoryItems.length
+    ? categoryItems
+        .map((item) => {
+          const isCustom = customCategorySet.has(item.toLowerCase());
+          const removeBtn = isCustom
+            ? `<button type="button" class="manage-remove" data-type="category" data-value="${escapeHtml(item)}" title="删除分类">×</button>`
+            : "";
+          return `<span class="manage-chip">${escapeHtml(item)}${removeBtn}</span>`;
+        })
+        .join("")
+    : `<span class="manage-empty">暂无分类</span>`;
+
+  const tagItems = getKnownTags();
+  const customTagSet = new Set(state.settings.customTags.map((v) => v.toLowerCase()));
+  els.tagManageList.innerHTML = tagItems.length
+    ? tagItems
+        .map((item) => {
+          const isCustom = customTagSet.has(item.toLowerCase());
+          const removeBtn = isCustom
+            ? `<button type="button" class="manage-remove" data-type="tag" data-value="${escapeHtml(item)}" title="删除标签">×</button>`
+            : "";
+          return `<span class="manage-chip">${escapeHtml(item)}${removeBtn}</span>`;
+        })
+        .join("")
+    : `<span class="manage-empty">暂无标签</span>`;
+}
+
+function addManagedCategory() {
+  const value = els.newCategoryInput.value.trim();
+  if (!value) return;
+  const merged = normalizeManageItems([...state.settings.customCategories, value]);
+  state.settings.customCategories = merged;
+  els.newCategoryInput.value = "";
+  saveSettings();
+  renderCategoryOptions();
+  renderManageSections();
+}
+
+function addManagedTag() {
+  const value = els.newTagInput.value.trim();
+  if (!value) return;
+  const merged = normalizeManageItems([...state.settings.customTags, value]);
+  state.settings.customTags = merged;
+  els.newTagInput.value = "";
+  saveSettings();
+  renderManageSections();
+  renderTagSelectOptions();
+}
+
+function removeManagedItem(type, value) {
+  const target = String(value || "").trim().toLowerCase();
+  if (!target) return;
+  if (type === "category") {
+    state.settings.customCategories = state.settings.customCategories.filter((v) => v.toLowerCase() !== target);
+    saveSettings();
+    renderCategoryOptions();
+    renderManageSections();
+    return;
+  }
+  if (type === "tag") {
+    state.settings.customTags = state.settings.customTags.filter((v) => v.toLowerCase() !== target);
+    saveSettings();
+    renderManageSections();
+    renderTagSelectOptions();
+  }
 }
 
 function toggleCategoryCustom() {
@@ -471,14 +929,16 @@ function getCategoryValue() {
 
 function renderRatesInfo() {
   const updated = state.ratesUpdatedAt ? formatDate(state.ratesUpdatedAt) : "未知";
-  const staleText = state.ratesStale ? "（使用缓存/回退）" : "";
-  const sourceLabelMap = {
-    frankfurter: "frankfurter",
-    fallback: "fallback(内置)",
-  };
-  const sourceLabel = sourceLabelMap[state.ratesSource] || (state.ratesSource || "unknown");
-  const sourceHtml = `<a href="https://www.frankfurter.app/" target="_blank" rel="noopener noreferrer">${escapeHtml(sourceLabel)}</a>`;
-  els.rateInfo.innerHTML = `汇率来源: ${sourceHtml} · 更新时间: ${updated}${staleText}`;
+  let refreshResultHtml = "";
+  if (state.rateRefreshStatus) {
+    const ts = state.rateRefreshAt ? ` ${state.rateRefreshAt}` : "";
+    if (state.rateRefreshStatus === "success") {
+      refreshResultHtml = ` · <span class="rate-success">刷新结果: 成功${ts}</span>`;
+    } else {
+      refreshResultHtml = ` · <span class="rate-fail">刷新结果: 失败，已回退${ts}</span>`;
+    }
+  }
+  els.rateInfo.innerHTML = `更新时间: ${updated}${refreshResultHtml}`;
 }
 
 async function request(url, options = {}) {
@@ -559,15 +1019,25 @@ async function fetchRates() {
   state.ratesUpdatedAt = payload.updatedAt || "";
   state.ratesSource = payload.source || "unknown";
   state.ratesStale = Boolean(payload.stale);
+  state.ratesMissingCodes = Array.isArray(payload.missingCodes) ? payload.missingCodes : [];
 }
 
 async function refreshRates() {
+  const oldText = els.refreshRatesBtn.textContent;
+  els.refreshRatesBtn.disabled = true;
+  els.refreshRatesBtn.textContent = "刷新中...";
   try {
     await fetchRates();
+    await refreshCustomCurrencyRates();
+    state.rateRefreshStatus = "success";
   } catch (err) {
     console.error("汇率刷新失败", err);
+    state.rateRefreshStatus = "error";
   }
+  state.rateRefreshAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
   render();
+  els.refreshRatesBtn.disabled = false;
+  els.refreshRatesBtn.textContent = oldText || "刷新汇率";
 }
 
 async function createSubscription(sub) {
@@ -587,6 +1057,29 @@ async function updateSubscription(id, sub) {
 async function removeSubscription(id) {
   await request(`${API_BASE}/${encodeURIComponent(id)}`, {
     method: "DELETE",
+  });
+}
+
+async function resetSubscriptionsToDemo() {
+  await request("/api/subscriptions/reset", {
+    method: "POST",
+  });
+}
+
+async function createShareLink() {
+  return request(SHARE_API, {
+    method: "POST",
+  });
+}
+
+async function fetchAdminUsers() {
+  state.adminUsers = await request(ADMIN_USERS_API);
+}
+
+async function setAdminUserStatus(userId, disabled) {
+  return request(ADMIN_USER_STATUS_API, {
+    method: "POST",
+    body: JSON.stringify({ userId, disabled }),
   });
 }
 
@@ -635,7 +1128,9 @@ function resetForm() {
   els.nextPaymentDate.value = todayISO();
   els.status.value = "active";
   els.currency.value = "CNY";
-  els.tags.value = "";
+  els.tagInput.value = "";
+  els.tagSelect.value = "";
+  setFormTags([]);
   els.iconUrl.value = "";
   setCategoryValue("");
 }
@@ -656,7 +1151,9 @@ function editSubscription(id) {
   setCategoryValue(sub.category);
   els.price.value = sub.price;
   els.currency.value = sub.currency || "CNY";
-  els.tags.value = tagsToInputValue(sub.tags);
+  els.tagInput.value = "";
+  els.tagSelect.value = "";
+  setFormTags(sub.tags);
   els.iconUrl.value = sub.iconUrl || "";
   els.cycle.value = sub.cycle;
   els.nextPaymentDate.value = sub.nextPaymentDate;
@@ -708,10 +1205,10 @@ function renderTable() {
         else dueText = `${diff} 天后扣费`;
       }
       return `
-        <tr>
+        <tr data-sub-id="${sub.id}">
           <td class="name-col" data-label="订阅信息">
             <div class="info-main">
-              <div class="service-name">
+              <div class="service-name" data-hover-trigger="detail">
                 <span class="service-icon${iconImg ? "" : " fallback"}" style="background:${iconMeta.bg}">
                   ${iconImg}
                   <span class="service-fallback">${escapeHtml(iconMeta.letter)}</span>
@@ -750,6 +1247,66 @@ function renderTable() {
       `;
     })
     .join("");
+}
+
+function hideRowHoverCard() {
+  els.rowHoverCard.classList.add("hidden");
+  els.rowHoverCard.setAttribute("aria-hidden", "true");
+}
+
+function placeRowHoverCard(clientX, clientY) {
+  const card = els.rowHoverCard;
+  const margin = 14;
+  const offset = 16;
+  let left = clientX + offset;
+  let top = clientY + offset;
+  const width = card.offsetWidth || 320;
+  const height = card.offsetHeight || 220;
+
+  if (left + width > window.innerWidth - margin) {
+    left = clientX - width - offset;
+  }
+  if (left < margin) left = margin;
+  if (top + height > window.innerHeight - margin) {
+    top = window.innerHeight - height - margin;
+  }
+  if (top < margin) top = margin;
+
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+}
+
+function showRowHoverCard(sub, clientX, clientY) {
+  if (!sub) return;
+  const tags = normalizeTags(sub.tags);
+  const original = formatMoney(sub.price, sub.currency || "CNY");
+  const inBase = formatMoney(amountInBase(sub.price, sub.currency || "CNY"), state.baseCurrency);
+  const note = (sub.note || "").trim();
+  const iconMeta = serviceIconMeta(sub);
+  const iconImg = iconMeta.icon
+    ? `<img src="${iconMeta.icon}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';this.parentElement.classList.add('fallback')">`
+    : "";
+  els.rowHoverCard.innerHTML = `
+    <div class="hover-card-head">
+      <h4>${escapeHtml(sub.name)}</h4>
+      <span class="hover-logo${iconImg ? "" : " fallback"}" style="background:${iconMeta.bg}">
+        ${iconImg}
+        <span class="hover-logo-fallback">${escapeHtml(iconMeta.letter)}</span>
+      </span>
+    </div>
+    <div class="hover-grid">
+      <div>分类</div><div>${escapeHtml(sub.category || "-")}</div>
+      <div>周期</div><div>${escapeHtml(CYCLE_LABELS[sub.cycle] || sub.cycle || "-")}</div>
+      <div>状态</div><div>${escapeHtml(STATUS_LABELS[sub.status] || sub.status || "-")}</div>
+      <div>下次扣费</div><div>${escapeHtml(formatDate(sub.nextPaymentDate))}</div>
+      <div>金额</div><div>${escapeHtml(original)} <small>≈ ${escapeHtml(inBase)}</small></div>
+      <div>标签</div><div>${tags.length ? tags.map((tag) => `<span class="hover-tag">${escapeHtml(tag)}</span>`).join("") : "<span>-</span>"}</div>
+      <div>备注</div><div>${note ? escapeHtml(note) : "-"}</div>
+    </div>
+  `;
+  els.rowHoverCard.classList.remove("hidden");
+  els.rowHoverCard.setAttribute("aria-hidden", "false");
+  placeRowHoverCard(clientX, clientY);
 }
 
 function renderSummary() {
@@ -854,8 +1411,12 @@ function renderReports() {
 }
 
 function render() {
+  renderCurrencyOptions();
   renderRatesInfo();
   renderCategoryOptions();
+  renderTagSelectOptions();
+  renderCurrencyCatalogOptions();
+  renderCustomCurrencyList();
   els.futureMonthsRangeSelect.value = String(state.futureReportMonths);
   els.pastMonthsRangeSelect.value = String(state.pastReportMonths);
   els.settingsBaseCurrency.value = state.baseCurrency;
@@ -865,10 +1426,72 @@ function render() {
   renderSummary();
   renderTable();
   renderReports();
+  renderManageSections();
+  renderAdminUsersPanel();
+}
+
+function renderAdminUsersPanel() {
+  const isSuperAdmin = Boolean(state.currentUser && state.currentUser.isSuperAdmin);
+  if (els.adminUsersNavBtn) {
+    els.adminUsersNavBtn.classList.toggle("hidden", !isSuperAdmin);
+  }
+  if (els.usersFeature) {
+    els.usersFeature.classList.toggle("hidden", !isSuperAdmin);
+  }
+  if (!isSuperAdmin || !els.adminUsersList) return;
+  const list = Array.isArray(state.adminUsers) ? state.adminUsers : [];
+  if (!list.length) {
+    els.adminUsersList.innerHTML = `<div class="manage-empty">暂无用户数据</div>`;
+    return;
+  }
+  const activeCount = list.filter((u) => !u.isDisabled).length;
+  els.adminUsersList.innerHTML = `
+    <div class="admin-users-summary">共 ${list.length} 个用户 · 正常 ${activeCount} · 禁用 ${list.length - activeCount}</div>
+    <div class="admin-users-head">
+      <span>用户</span>
+      <span>角色</span>
+      <span>状态</span>
+      <span>信息</span>
+      <span>操作</span>
+    </div>
+    ${list
+      .map((user) => {
+        const roleBadge = user.isSuperAdmin ? `<span class="admin-role">超级管理员</span>` : `<span class="admin-role normal">普通用户</span>`;
+        const statusBadge = user.isDisabled
+          ? `<span class="admin-role disabled">已禁用</span>`
+          : `<span class="admin-role active">正常</span>`;
+        const actionBtn = user.isSuperAdmin
+          ? `<span class="admin-action muted">不可操作</span>`
+          : `<button type="button" class="admin-action ${user.isDisabled ? "enable" : "disable"}" data-action="toggle-user-status" data-id="${escapeHtml(
+              user.id,
+            )}" data-disabled="${user.isDisabled ? "0" : "1"}">${user.isDisabled ? "解禁用户" : "禁用用户"}</button>`;
+        return `
+          <div class="admin-user-row">
+            <div class="admin-user-main">
+              <span class="admin-avatar">${escapeHtml((user.username || "U").slice(0, 1).toUpperCase())}</span>
+              <strong>${escapeHtml(user.username)}</strong>
+            </div>
+            <div class="admin-col">${roleBadge}</div>
+            <div class="admin-col">${statusBadge}</div>
+            <div class="admin-user-meta">订阅数 ${Number(user.subscriptionCount || 0)} · ${escapeHtml(formatDate(user.createdAt))}</div>
+            <div class="admin-user-actions">${actionBtn}</div>
+          </div>
+        `;
+      })
+      .join("")}
+  `;
 }
 
 async function refreshAndRender() {
-  await Promise.all([fetchSubscriptions(), fetchRates().catch(() => null)]);
+  const tasks = [fetchSubscriptions(), fetchRates().catch(() => null)];
+  if (state.currentUser && state.currentUser.isSuperAdmin) {
+    tasks.push(fetchAdminUsers().catch(() => {
+      state.adminUsers = [];
+    }));
+  } else {
+    state.adminUsers = [];
+  }
+  await Promise.all(tasks);
   const settled = await autoSettleOverdueSubscriptions();
   if (settled) {
     await fetchSubscriptions();
@@ -890,11 +1513,17 @@ function setActiveNav(navKey) {
 }
 
 function showDashboardFeature(navKey) {
-  const key = navKey === "list" || navKey === "reports" ? navKey : "overview";
+  const allowed = new Set(["overview", "list", "reports", "categories", "tags", "users"]);
+  const key = allowed.has(navKey) ? navKey : "overview";
   const isOverview = key === "overview";
   els.overviewFeature.classList.toggle("active-feature", isOverview);
   els.listFeature.classList.toggle("active-feature", isOverview || key === "list");
   els.reportsFeature.classList.toggle("active-feature", isOverview || key === "reports");
+  els.categoriesFeature.classList.toggle("active-feature", key === "categories");
+  els.tagsFeature.classList.toggle("active-feature", key === "tags");
+  if (els.usersFeature) {
+    els.usersFeature.classList.toggle("active-feature", key === "users");
+  }
 }
 
 function loadSettings() {
@@ -912,7 +1541,12 @@ function loadSettings() {
       if (typeof parsed.showApprox === "boolean") {
         state.settings.showApprox = parsed.showApprox;
       }
+      state.settings.customCategories = normalizeManageItems(parsed.customCategories || []);
+      state.settings.customTags = normalizeManageItems(parsed.customTags || []);
+      state.settings.customCurrencies = normalizeCustomCurrencies(parsed.customCurrencies || []);
       if (parsed.baseCurrency && CURRENCIES.some((c) => c.code === parsed.baseCurrency)) {
+        state.baseCurrency = parsed.baseCurrency;
+      } else if (parsed.baseCurrency && /^[A-Z0-9]{3,10}$/.test(parsed.baseCurrency)) {
         state.baseCurrency = parsed.baseCurrency;
       }
     }
@@ -929,6 +1563,9 @@ function saveSettings() {
       rateIntervalMinutes: state.settings.rateIntervalMinutes,
       showApprox: state.settings.showApprox,
       defaultMonths: state.settings.defaultMonths,
+      customCategories: normalizeManageItems(state.settings.customCategories),
+      customTags: normalizeManageItems(state.settings.customTags),
+      customCurrencies: normalizeCustomCurrencies(state.settings.customCurrencies),
     }),
   );
 }
@@ -943,7 +1580,9 @@ function restartRateTimer() {
 
 function bindEvents() {
   els.showLoginBtn.addEventListener("click", () => showAuthMode("login"));
-  els.showRegisterBtn.addEventListener("click", () => showAuthMode("register"));
+  if (els.showRegisterBtn) {
+    els.showRegisterBtn.addEventListener("click", () => showAuthMode("register"));
+  }
 
   els.loginForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -959,19 +1598,21 @@ function bindEvents() {
     }
   });
 
-  els.registerForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      const payload = await authRegister(els.registerUsername.value.trim(), els.registerPassword.value);
-      applyAuthPayload(payload);
-      els.registerPassword.value = "";
-      showAppShell();
-      await refreshAndRender();
-      restartRateTimer();
-    } catch (err) {
-      setAuthMessage(`注册失败: ${err.message}`);
-    }
-  });
+  if (els.registerForm) {
+    els.registerForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const payload = await authRegister(els.registerUsername.value.trim(), els.registerPassword.value);
+        applyAuthPayload(payload);
+        els.registerPassword.value = "";
+        showAppShell();
+        await refreshAndRender();
+        restartRateTimer();
+      } catch (err) {
+        setAuthMessage(`注册失败: ${err.message}`);
+      }
+    });
+  }
 
   els.logoutBtn.addEventListener("click", async () => {
     try {
@@ -997,7 +1638,7 @@ function bindEvents() {
       category: getCategoryValue(),
       price: Number(els.price.value),
       currency: els.currency.value,
-      tags: normalizeTags(els.tags.value),
+      tags: normalizeTags(state.formTags),
       iconUrl: normalizeIconUrl(els.iconUrl.value),
       cycle: els.cycle.value,
       nextPaymentDate: els.nextPaymentDate.value,
@@ -1034,6 +1675,15 @@ function bindEvents() {
 
   els.resetBtn.addEventListener("click", resetForm);
   els.refreshRatesBtn.addEventListener("click", refreshRates);
+  els.shareListBtn.addEventListener("click", async () => {
+    try {
+      const payload = await createShareLink();
+      const url = `${window.location.origin}${payload.urlPath}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      alert(`打开分享预览失败: ${err.message}`);
+    }
+  });
   els.futureMonthsRangeSelect.addEventListener("change", (e) => {
     state.futureReportMonths = Number(e.target.value) === 12 ? 12 : 6;
     renderReports();
@@ -1041,6 +1691,47 @@ function bindEvents() {
   els.pastMonthsRangeSelect.addEventListener("change", (e) => {
     state.pastReportMonths = Number(e.target.value) === 12 ? 12 : 6;
     renderReports();
+  });
+  els.addCategoryBtn.addEventListener("click", addManagedCategory);
+  els.newCategoryInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addManagedCategory();
+    }
+  });
+  els.addTagBtn.addEventListener("click", addManagedTag);
+  els.newTagInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addManagedTag();
+    }
+  });
+  if (els.addCustomCurrencyBtn) {
+    els.addCustomCurrencyBtn.addEventListener("click", addCustomCurrency);
+  }
+  if (els.customCurrencyCatalog) {
+    els.customCurrencyCatalog.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      addCustomCurrency();
+    });
+  }
+  if (els.customCurrencyList) {
+    els.customCurrencyList.addEventListener("click", (e) => {
+      const btn = e.target.closest('button[data-action="remove-custom-currency"]');
+      if (!btn) return;
+      removeCustomCurrency(btn.dataset.code);
+    });
+  }
+  els.categoryManageList.addEventListener("click", (e) => {
+    const btn = e.target.closest("button.manage-remove");
+    if (!btn) return;
+    removeManagedItem(btn.dataset.type, btn.dataset.value);
+  });
+  els.tagManageList.addEventListener("click", (e) => {
+    const btn = e.target.closest("button.manage-remove");
+    if (!btn) return;
+    removeManagedItem(btn.dataset.type, btn.dataset.value);
   });
 
   for (const link of els.navLinks) {
@@ -1076,6 +1767,53 @@ function bindEvents() {
     alert("设置已保存");
   });
 
+  els.resetDataBtn.addEventListener("click", async () => {
+    const ok = confirm("确认要清空并重置数据吗？当前订阅会被删除并恢复为默认示例数据。");
+    if (!ok) return;
+    try {
+      await resetSubscriptionsToDemo();
+      state.settings.customCategories = [];
+      state.settings.customTags = [];
+      saveSettings();
+      resetForm();
+      await refreshAndRender();
+      showPage("dashboardPage");
+      setActiveNav("overview");
+      showDashboardFeature("overview");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      alert("已重置为默认示例数据");
+    } catch (err) {
+      alert(`重置失败: ${err.message}`);
+    }
+  });
+  if (els.refreshAdminUsersBtn) {
+    els.refreshAdminUsersBtn.addEventListener("click", async () => {
+      if (!state.currentUser || !state.currentUser.isSuperAdmin) return;
+      try {
+        await fetchAdminUsers();
+        renderAdminUsersPanel();
+      } catch (err) {
+        alert(`加载用户失败: ${err.message}`);
+      }
+    });
+  }
+  if (els.adminUsersList) {
+    els.adminUsersList.addEventListener("click", async (e) => {
+      const btn = e.target.closest('button[data-action="toggle-user-status"]');
+      if (!btn) return;
+      if (!state.currentUser || !state.currentUser.isSuperAdmin) return;
+      const userId = btn.dataset.id;
+      const disabled = btn.dataset.disabled === "1";
+      try {
+        await setAdminUserStatus(userId, disabled);
+        await fetchAdminUsers();
+        renderAdminUsersPanel();
+      } catch (err) {
+        alert(`更新用户状态失败: ${err.message}`);
+      }
+    });
+  }
+
   els.passwordForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const oldPassword = els.currentPassword.value;
@@ -1109,6 +1847,28 @@ function bindEvents() {
     renderTable();
   });
   els.categorySelect.addEventListener("change", toggleCategoryCustom);
+  els.addTagToFormBtn.addEventListener("click", () => {
+    if (!els.tagSelect.value) return;
+    addFormTag(els.tagSelect.value);
+    els.tagSelect.value = "";
+  });
+  els.addNewTagBtn.addEventListener("click", () => {
+    addFormTag(els.tagInput.value);
+    els.tagInput.value = "";
+  });
+  els.tagInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    addFormTag(els.tagInput.value);
+    els.tagInput.value = "";
+  });
+  els.tagPreview.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-remove-form-tag]");
+    if (!btn) return;
+    const value = btn.dataset.removeFormTag;
+    state.formTags = state.formTags.filter((tag) => tag.toLowerCase() !== String(value || "").toLowerCase());
+    setFormTags(state.formTags);
+  });
 
   els.tableBody.addEventListener("click", async (e) => {
     const btn = e.target.closest("button");
@@ -1127,12 +1887,40 @@ function bindEvents() {
       alert(`操作失败: ${err.message}`);
     }
   });
+
+  els.tableBody.addEventListener("mouseover", (e) => {
+    const trigger = e.target.closest('[data-hover-trigger="detail"]');
+    if (!trigger) return;
+    const row = trigger.closest("tr[data-sub-id]");
+    if (!row) return;
+    const sub = state.subscriptions.find((item) => item.id === row.dataset.subId);
+    if (!sub) return;
+    showRowHoverCard(sub, e.clientX, e.clientY);
+  });
+
+  els.tableBody.addEventListener("mousemove", (e) => {
+    const trigger = e.target.closest('[data-hover-trigger="detail"]');
+    if (!trigger || els.rowHoverCard.classList.contains("hidden")) return;
+    placeRowHoverCard(e.clientX, e.clientY);
+  });
+
+  els.tableBody.addEventListener("mouseout", (e) => {
+    const trigger = e.target.closest('[data-hover-trigger="detail"]');
+    if (!trigger) return;
+    const to = e.relatedTarget;
+    if (to && trigger.contains(to)) return;
+    if (to && to.closest?.('[data-hover-trigger="detail"]')) return;
+    hideRowHoverCard();
+  });
+
+  window.addEventListener("scroll", hideRowHoverCard, { passive: true });
 }
 
 async function init() {
   loadSettings();
   state.futureReportMonths = state.settings.defaultMonths;
   state.pastReportMonths = state.settings.defaultMonths;
+  await fetchCurrencyCatalog();
   renderCurrencyOptions();
   bindEvents();
   resetForm();

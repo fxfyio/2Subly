@@ -61,6 +61,9 @@
         <button type="button" class="active" data-page-target="dashboardPage" data-nav-key="overview" data-scroll-target="summaryCards">总览</button>
         <button type="button" data-page-target="dashboardPage" data-nav-key="list" data-scroll-target="subscriptionTableBody">订阅列表</button>
         <button type="button" data-page-target="dashboardPage" data-nav-key="reports" data-scroll-target="categoryChart">报表分析</button>
+        <button type="button" data-page-target="dashboardPage" data-nav-key="categories" data-scroll-target="categoryManageList">分类管理</button>
+        <button type="button" data-page-target="dashboardPage" data-nav-key="tags" data-scroll-target="tagManageList">标签管理</button>
+        <button type="button" id="adminUsersNavBtn" class="hidden" data-page-target="dashboardPage" data-nav-key="users" data-scroll-target="adminUsersList">用户管理</button>
         <button type="button" data-page-target="settingsPage" data-nav-key="settings">设置</button>
       </nav>
       <button type="button" id="openFormBtn" class="side-add-btn">+ 添加订阅</button>
@@ -91,6 +94,11 @@
           <div class="panel-head">
             <h2>订阅列表</h2>
             <div class="toolbar">
+              <button type="button" id="shareListBtn" class="icon-only-btn" title="分享预览" aria-label="分享预览">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14 5h5v5M10 14L19 5M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>
+                </svg>
+              </button>
               <select id="baseCurrency"></select>
               <input id="searchInput" placeholder="搜索名称或分类">
             </div>
@@ -151,6 +159,45 @@
           </div>
         </section>
       </section>
+
+      <section id="categoriesFeature" class="feature-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>分类管理</h2>
+          </div>
+          <div class="manage-input-row">
+            <input id="newCategoryInput" placeholder="输入新分类，例如：家庭 / 交通 / 宠物">
+            <button type="button" id="addCategoryBtn" class="primary">添加分类</button>
+          </div>
+          <p class="manage-tip">自定义分类会出现在新增/编辑订阅的分类选项中。</p>
+          <div id="categoryManageList" class="manage-list"></div>
+        </section>
+      </section>
+
+      <section id="tagsFeature" class="feature-section">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>标签管理</h2>
+          </div>
+          <div class="manage-input-row">
+            <input id="newTagInput" placeholder="输入新标签，例如：团队 / 年付 / 工作">
+            <button type="button" id="addTagBtn" class="primary">添加标签</button>
+          </div>
+          <p class="manage-tip">自定义标签可在录入订阅时快速复用。</p>
+          <div id="tagManageList" class="manage-list"></div>
+        </section>
+      </section>
+
+      <section id="usersFeature" class="feature-section hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>用户管理</h2>
+            <button type="button" id="refreshAdminUsersBtn">刷新用户</button>
+          </div>
+          <p class="manage-tip">仅超级管理员可见，用于查看当前注册用户。</p>
+          <div id="adminUsersList" class="admin-users-list"></div>
+        </section>
+      </section>
       </section>
 
       <section id="settingsPage" class="page">
@@ -193,6 +240,18 @@
         </section>
 
         <section class="panel">
+          <h2>自定义币种</h2>
+          <div class="manage-input-row currency-manage-row">
+            <select id="customCurrencyCatalog">
+              <option value="">选择币种...</option>
+            </select>
+            <button type="button" id="addCustomCurrencyBtn" class="primary">添加币种</button>
+          </div>
+          <p class="manage-tip">基础币种保留不变；从全球各国家/地区币种中选择后添加，汇率会自动获取。</p>
+          <div id="customCurrencyList" class="admin-users-list"></div>
+        </section>
+
+        <section class="panel">
           <h2>账户安全</h2>
           <form id="passwordForm" class="grid">
             <label>
@@ -217,10 +276,20 @@
         <section class="panel">
           <h2>关于</h2>
           <div class="setting-note">
-            <p>当前数据存储：SQLite（`subly.db`）</p>
-            <p>汇率来源：后端实时拉取（失败自动回退）</p>
+            <p>Subly：专注订阅跟踪、账单提醒与多币种统计。</p>
+            <p>当前版本：本地部署版（实时汇率 + 分享预览）。</p>
+            <p>隐私说明：你的订阅数据默认仅你可见，只有主动分享才会生成公开链接。</p>
           </div>
         </section>
+
+        <section class="panel danger-panel">
+          <h2>危险操作</h2>
+          <p class="danger-note">清空后会删除你当前所有订阅数据，并重置为首次进入时的默认示例数据。</p>
+          <div class="actions">
+            <button type="button" id="resetDataBtn" class="danger">清空并重置数据</button>
+          </div>
+        </section>
+
       </section>
     </main>
   </div>
@@ -255,7 +324,20 @@
         </label>
         <label class="full">
           标签（可选）
-          <input id="tags" placeholder="多个标签用逗号分隔，例如：工作,AI,团队">
+          <div class="tag-editor">
+            <div class="tag-editor-row">
+              <select id="tagSelect">
+                <option value="">选择已有标签</option>
+              </select>
+              <button type="button" id="addTagToFormBtn">添加</button>
+            </div>
+            <div class="tag-editor-row">
+              <input id="tagInput" placeholder="输入新标签后回车添加，例如：工作">
+              <button type="button" id="addNewTagBtn">新增</button>
+            </div>
+            <div id="tagPreview" class="manage-list tag-preview"></div>
+            <input id="tags" type="hidden">
+          </div>
         </label>
         <label class="full">
           图标 URL（可选，优先使用）
@@ -293,6 +375,7 @@
       </form>
     </section>
   </div>
+  <aside id="rowHoverCard" class="row-hover-card hidden" aria-hidden="true"></aside>
   <script src="app.js"></script>
 </body>
 </html>

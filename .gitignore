@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local runtime data
+subly.db
+data/
+*.log
+.server.log
+
+# Env / local overrides
+.env
+.env.*
+
+# Editors
+.vscode/
+.idea/

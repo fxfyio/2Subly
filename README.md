@@ -1,19 +1,22 @@
-# Subly 订阅管理软件（SQLite 版）
+# Subly 订阅管理软件
 
 这是一个本地可运行的订阅管理工具，支持：
 
 - 订阅新增 / 编辑 / 删除
 - 用户认证（注册 / 登录 / 退出，会话令牌）
-- 常见币种支持（`CNY/USD/EUR/GBP/JPY/HKD/SGD/AUD/CAD/PHP`）
+- 支持在设置页从国际币种目录中选择并添加币种（自动拉取该币种汇率）
 - 报表汇率实时转换（后端拉取实时汇率，失败时自动回退缓存）
 - 下次扣费时间追踪（支持“已扣费”自动顺延）
 - 汇总卡片（总订阅、活跃订阅、月均支出、未来 30 天预计扣费）
 - 报表展示（按分类月均支出、未来 6 个月预计支出）
-- SQLite 持久化存储
+
+## 界面预览
+
+![Subly Dashboard](preview.png)
 
 ## 数据存储位置
 
-- SQLite 文件：`/Users/zc/Desktop/Subly2/subly.db`
+- SQLite 文件：`/path/to/Subly2/subly.db`
 - 表名：`subscriptions`
 - 币种字段：`currency`
 - 汇率接口：`GET /api/rates?base=USD`
@@ -32,9 +35,64 @@ python3 /Users/zc/Desktop/Subly2/server.py
 
 - [http://localhost:5173](http://localhost:5173)
 
+## Docker 部署
+
+### 1) 使用 Docker Compose（推荐）
+
+在项目目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+访问：
+
+- [http://localhost:5173](http://localhost:5173)
+
+停止：
+
+```bash
+docker compose down
+```
+
+数据持久化目录：
+
+- `./data/subly.db`（映射到容器 `/app/data/subly.db`）
+
+### 2) 使用 Docker CLI
+
+构建镜像：
+
+```bash
+docker build -t subly:latest .
+```
+
+运行容器：
+
+```bash
+docker run -d \
+  --name subly \
+  -p 5173:5173 \
+  -e HOST=0.0.0.0 \
+  -e PORT=5173 \
+  -e DB_PATH=/app/data/subly.db \
+  -e SUPER_ADMIN_USERNAME=superadmin \
+  -e SUPER_ADMIN_PASSWORD=Subly@123456 \
+  -v "$(pwd)/data:/app/data" \
+  subly:latest
+```
+
+## 环境变量
+
+- `HOST`：监听地址（Docker 建议 `0.0.0.0`）
+- `PORT`：监听端口（默认 `5173`）
+- `DB_PATH`：SQLite 文件路径（默认 `subly.db`）
+- `SUPER_ADMIN_USERNAME`：超级管理员用户名
+- `SUPER_ADMIN_PASSWORD`：超级管理员密码（生产环境务必修改）
+
 ## 文件结构
 
-- `/Users/zc/Desktop/Subly2/index.html` 页面结构
-- `/Users/zc/Desktop/Subly2/styles.css` 样式
-- `/Users/zc/Desktop/Subly2/app.js` 前端逻辑（调用 API）
-- `/Users/zc/Desktop/Subly2/server.py` 后端服务（SQLite + API + 静态文件）
+- `/path/to/Subly2/index.html` 页面结构
+- `/path/to/Subly2/styles.css` 样式
+- `/path/to/Subly2/app.js` 前端逻辑（调用 API）
+- `/path/to/Subly2/server.py` 后端服务（API + 静态文件）

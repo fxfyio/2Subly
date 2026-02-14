@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subly 分享列表</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="share-page">
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <div class="bg-grid"></div>
+  <main class="share-shell">
+    <header class="share-head">
+      <h1 id="shareTitle">订阅列表分享</h1>
+      <p id="shareMeta">加载中...</p>
+    </header>
+    <section class="share-panel">
+      <div id="shareList" class="share-list"></div>
+      <div class="share-footer">
+        <label for="shareUrlInput">分享链接</label>
+        <div class="share-copy-row">
+          <input id="shareUrlInput" readonly>
+          <button type="button" id="copyShareUrlBtn" class="primary">复制链接</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/share.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+services:
+  subly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: subly
+    ports:
+      - "5173:5173"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5173
+      DB_PATH: /app/data/subly.db
+      SUPER_ADMIN_USERNAME: superadmin
+      SUPER_ADMIN_PASSWORD: Subly@123456
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
