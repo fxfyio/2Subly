@@ -49,7 +49,28 @@ docker compose down
 
 数据持久化目录：
 
-- `./data/subly.db`（映射到容器 `/app/data/subly.db`）
+- `${SUBLY_DATA_DIR:-/opt/subly/data}/subly.db`（映射到容器 `/app/data/subly.db`）
+
+建议先创建并授权目录（尤其是 Portainer）：
+
+```bash
+mkdir -p /opt/subly/data
+chown -R 10001:10001 /opt/subly/data
+chmod -R u+rwX,g+rwX /opt/subly/data
+```
+
+如果你不想使用默认目录，可通过环境变量指定：
+
+```bash
+export SUBLY_DATA_DIR=/your/absolute/path/subly-data
+docker compose up -d --build
+```
+
+### Portainer 重新部署注意事项
+
+- 不要使用相对路径（如 `./data`），请使用绝对宿主机路径。
+- 确保每次重部署都挂载同一个 `SUBLY_DATA_DIR`。
+- 只要挂载目录不变，`subly.db` 就会持续保留。
 
 ### 2) 使用 Docker CLI
 
@@ -70,7 +91,7 @@ docker run -d \
   -e DB_PATH=/app/data/subly.db \
   -e SUPER_ADMIN_USERNAME=superadmin \
   -e SUPER_ADMIN_PASSWORD=Subly@123456 \
-  -v "$(pwd)/data:/app/data" \
+  -v "/opt/subly/data:/app/data" \
   subly:latest
 ```
 
@@ -81,4 +102,3 @@ docker run -d \
 - `DB_PATH`：SQLite 文件路径（默认 `subly.db`）
 - `SUPER_ADMIN_USERNAME`：超级管理员用户名
 - `SUPER_ADMIN_PASSWORD`：超级管理员密码（生产环境务必修改）
-

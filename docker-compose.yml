@@ -13,5 +13,5 @@ services:
       SUPER_ADMIN_USERNAME: superadmin
       SUPER_ADMIN_PASSWORD: Subly@123456
     volumes:
-      - ./data:/app/data
+      - ${SUBLY_DATA_DIR:-/opt/subly/data}:/app/data
     restart: unless-stopped
