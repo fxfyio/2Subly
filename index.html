@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Subly - 订阅管理</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="/favicon.ico">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -343,6 +345,14 @@
           图标 URL（可选，优先使用）
           <input id="iconUrl" placeholder="https://example.com/logo.png">
         </label>
+        <div class="full icon-resolve-actions">
+          <button type="button" id="recheckIconBtn">重新自动识别</button>
+          <input id="iconUpload" class="hidden-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+          <label for="iconUpload" id="iconUploadPicker" class="file-picker-btn">选择图片</label>
+          <span id="iconUploadFileName" class="file-picked-name">未选择文件</span>
+          <button type="button" id="uploadIconBtn">上传图标</button>
+        </div>
+        <div id="iconUploadMessage" class="full icon-upload-message"></div>
         <div id="iconResolvePreview" class="full icon-resolve-preview hidden" aria-live="polite"></div>
         <label>
           计费周期

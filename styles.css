@@ -695,6 +695,17 @@ button {
   object-fit: contain;
 }
 
+.icon-resolve-badge.has-image {
+  border: none;
+  background: transparent !important;
+}
+
+.icon-resolve-badge.has-image img {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+}
+
 .icon-resolve-fallback {
   font-size: 14px;
   font-weight: 700;
@@ -716,6 +727,64 @@ button {
 .icon-resolve-desc {
   font-size: 12px;
   color: #6d82a5;
+}
+
+.icon-resolve-actions {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d7e2f3;
+  border-radius: 11px;
+  background: #fff;
+  color: #1f3557;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.file-picker-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(42, 95, 167, 0.14);
+}
+
+.file-picked-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #5f7395;
+}
+
+.icon-upload-message {
+  min-height: 18px;
+  font-size: 12px;
+  color: #6d82a5;
+}
+
+.icon-upload-message.error {
+  color: #b03c3c;
+}
+
+.icon-upload-message.success {
+  color: #1f7a4f;
 }
 
 input,
@@ -900,6 +969,17 @@ td small {
   width: 14px;
   height: 14px;
   object-fit: contain;
+}
+
+.service-icon.has-image {
+  border: none;
+  background: transparent !important;
+}
+
+.service-icon.has-image img {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
 }
 
 .service-fallback {
@@ -1311,6 +1391,17 @@ td.actions-cell {
   width: 34px;
   height: 34px;
   object-fit: contain;
+}
+
+.hover-logo.has-image {
+  border: none;
+  background: transparent !important;
+}
+
+.hover-logo.has-image img {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
 }
 
 .hover-logo-fallback {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
 import hmac
+import base64
 import json
 import mimetypes
 import os
@@ -63,6 +64,10 @@ CURRENCY_NAME_CACHE = {
 SERVICE_ICON_HINTS = [
   {"keyword": "chatgpt", "domain": "chatgpt.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/openai.svg"},
   {"keyword": "openai", "domain": "openai.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/openai.svg"},
+  {"keyword": "汽水音乐", "domain": "music.douyin.com", "icon": "https://cdn.simpleicons.org/tiktok/000000"},
+  {"keyword": "抖音", "domain": "douyin.com", "icon": "https://cdn.simpleicons.org/tiktok/000000"},
+  {"keyword": "qq音乐", "domain": "y.qq.com", "icon": "https://cdn.simpleicons.org/tencentqq/12B7F5"},
+  {"keyword": "网易云音乐", "domain": "music.163.com", "icon": "https://cdn.simpleicons.org/neteasecloudmusic/D43C33"},
   {"keyword": "spotify", "domain": "spotify.com", "icon": "https://cdn.simpleicons.org/spotify/1DB954"},
   {"keyword": "youtube", "domain": "youtube.com", "icon": "https://cdn.simpleicons.org/youtube/FF0000"},
   {"keyword": "netflix", "domain": "netflix.com", "icon": "https://cdn.simpleicons.org/netflix/E50914"},
@@ -73,6 +78,27 @@ SERVICE_ICON_HINTS = [
   {"keyword": "microsoft", "domain": "microsoft.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/microsoft.svg"},
   {"keyword": "canva", "domain": "canva.com", "icon": "https://cdn.jsdelivr.net/npm/simple-icons/icons/canva.svg"},
 ]
+SERVICE_NAME_ALIASES = {
+  "汽水音乐": ["tiktok", "douyin", "musicdouyin"],
+  "抖音": ["tiktok", "douyin"],
+  "飞书": ["lark", "feishu"],
+  "钉钉": ["dingtalk"],
+  "腾讯会议": ["voovmeeting", "tencentmeeting"],
+  "微信读书": ["wechat"],
+  "网易云音乐": ["neteasecloudmusic"],
+  "qq音乐": ["qqmusic", "tencentqq"],
+  "b站": ["bilibili"],
+  "哔哩哔哩": ["bilibili"],
+}
+UPLOAD_DIR = BASE_DIR / "assets" / "uploads"
+ALLOWED_UPLOAD_MIME = {
+  "image/png": ".png",
+  "image/jpg": ".jpg",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp",
+  "image/svg+xml": ".svg",
+}
+MAX_ICON_UPLOAD_BYTES = 1024 * 1024
 
 DEMO_SUBSCRIPTIONS = [
   ("ChatGPT Plus", "效率工具", 20.0, "USD", "monthly"),
@@ -399,6 +425,16 @@ def build_icon_candidates(name, category=""):
         add(f"https://www.google.com/s2/favicons?sz=128&domain={quote(domain)}", "google-favicon")
         add(f"https://icons.duckduckgo.com/ip3/{quote(domain)}.ico", "duckduckgo-favicon")
 
+  for alias_key, alias_values in SERVICE_NAME_ALIASES.items():
+    if alias_key in (name or "") or alias_key.lower() in n:
+      for alias in alias_values:
+        add(f"https://cdn.simpleicons.org/{quote(alias)}", "alias-simpleicons")
+        add(f"https://cdn.jsdelivr.net/npm/simple-icons/icons/{quote(alias)}.svg", "alias-simpleicons-jsdelivr")
+        for tld in ("com", "cn", "io", "ai", "app"):
+          domain = f"{alias}.{tld}"
+          add(f"https://www.google.com/s2/favicons?sz=128&domain={quote(domain)}", "alias-google-favicon")
+          add(f"https://icons.duckduckgo.com/ip3/{quote(domain)}.ico", "alias-ddg-favicon")
+
   slug = slugify_service_name(name)
   if slug:
     slug_variants = [slug]
@@ -424,6 +460,59 @@ def build_icon_candidates(name, category=""):
   return candidates[:24]
 
 
+def fetch_itunes_icon(name):
+  term = (name or "").strip()
+  if not term:
+    return ""
+  search_urls = [
+    f"https://itunes.apple.com/search?term={quote(term)}&country=cn&entity=software&limit=8",
+    f"https://itunes.apple.com/search?term={quote(term)}&country=us&entity=software&limit=8",
+  ]
+
+  normalized_term = normalize_service_text(term).replace(" ", "")
+  for url in search_urls:
+    try:
+      req = Request(url, headers={"User-Agent": "Subly/1.0 (+https://localhost)"})
+      with urlopen(req, timeout=6) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+      continue
+
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+      continue
+
+    best_url = ""
+    best_score = -1
+    for item in results:
+      if not isinstance(item, dict):
+        continue
+      artwork = str(item.get("artworkUrl512") or item.get("artworkUrl100") or "").strip()
+      if not artwork.startswith("http"):
+        continue
+      track_name = str(item.get("trackName") or "").strip()
+      bundle = str(item.get("bundleId") or "").strip().lower()
+      n_track = normalize_service_text(track_name).replace(" ", "")
+
+      score = 0
+      if n_track and normalized_term and (normalized_term in n_track or n_track in normalized_term):
+        score += 4
+      if normalized_term and normalized_term in bundle:
+        score += 3
+      if str(item.get("primaryGenreName") or "").lower() in {"music", "entertainment", "productivity"}:
+        score += 1
+      if item.get("sellerName"):
+        score += 1
+
+      if score > best_score:
+        best_score = score
+        best_url = artwork
+
+    if best_url:
+      return best_url
+  return ""
+
+
 def resolve_icon_url(name, category=""):
   cache_key = f"{normalize_service_text(name)}|{normalize_service_text(category)}"
   if not cache_key or cache_key == "|":
@@ -432,6 +521,15 @@ def resolve_icon_url(name, category=""):
   cached = icon_cache_get(cache_key)
   if cached:
     return cached
+
+  # Priority source: App Store search usually has better coverage for Chinese app names.
+  try:
+    itunes_icon = fetch_itunes_icon(name)
+    if itunes_icon:
+      icon_cache_set(cache_key, itunes_icon, "itunes-search")
+      return {"iconUrl": itunes_icon, "provider": "itunes-search", "cached": False}
+  except Exception:
+    pass
 
   for url, provider in build_icon_candidates(name, category):
     try:
@@ -442,6 +540,51 @@ def resolve_icon_url(name, category=""):
       continue
 
   return {"iconUrl": "", "provider": "none", "cached": False}
+
+
+def store_uploaded_icon(file_name, mime_type, data_url):
+  mime = (mime_type or "").strip().lower()
+  if mime == "image/jpg":
+    mime = "image/jpeg"
+  if not mime:
+    m = re.match(r"^data:([^;]+);base64,", data_url or "", re.IGNORECASE)
+    if m:
+      mime = m.group(1).strip().lower()
+  if mime == "image/jpg":
+    mime = "image/jpeg"
+  if not mime:
+    ext = Path(file_name or "").suffix.lower()
+    ext_to_mime = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".svg": "image/svg+xml",
+    }
+    mime = ext_to_mime.get(ext, "")
+  if mime not in ALLOWED_UPLOAD_MIME:
+    raise ValueError("仅支持 PNG/JPG/WEBP/SVG")
+  if not data_url.startswith("data:") or ";base64," not in data_url:
+    raise ValueError("无效的图片数据")
+  b64 = data_url.split(";base64,", 1)[1]
+  try:
+    raw = base64.b64decode(b64, validate=True)
+  except Exception as err:
+    raise ValueError("图片编码错误") from err
+  if not raw or len(raw) > MAX_ICON_UPLOAD_BYTES:
+    raise ValueError("图片为空或超过 1MB 限制")
+
+  ext = ALLOWED_UPLOAD_MIME[mime]
+  safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", (file_name or "icon").strip())[:32] or "icon"
+  upload_name = f"{safe}-{secrets.token_hex(6)}{ext}"
+  UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+  path = (UPLOAD_DIR / upload_name).resolve()
+  try:
+    path.relative_to(BASE_DIR.resolve())
+  except ValueError as err:
+    raise ValueError("非法上传路径") from err
+  path.write_bytes(raw)
+  return f"/assets/uploads/{upload_name}"
 
 
 def normalize_payload(payload):
@@ -909,7 +1052,7 @@ class Handler(BaseHTTPRequestHandler):
     query = parse_qs(parsed.query)
 
     # Browser/DevTools probing endpoints; silence noisy 404s in local console.
-    if path in {"/.well-known/appspecific/com.chrome.devtools.json", "/favicon.ico"}:
+    if path in {"/.well-known/appspecific/com.chrome.devtools.json"}:
       self._send_no_content()
       return
 
@@ -1062,6 +1205,8 @@ class Handler(BaseHTTPRequestHandler):
     static_map = {
       "/": ("index.html", "text/html; charset=utf-8"),
       "/index.html": ("index.html", "text/html; charset=utf-8"),
+      "/favicon.ico": ("assets/subly-logo.svg", "image/svg+xml"),
+      "/favicon.svg": ("assets/subly-logo.svg", "image/svg+xml"),
       "/app.js": ("app.js", "application/javascript; charset=utf-8"),
       "/styles.css": ("styles.css", "text/css; charset=utf-8"),
       "/share.html": ("share.html", "text/html; charset=utf-8"),
@@ -1109,6 +1254,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(400, {"error": "Missing name"})
         return
       self._send_json(200, resolve_icon_url(name, category))
+      return
+
+    if parsed.path == "/api/icons/upload":
+      user = self._require_auth()
+      if not user:
+        return
+      payload = self._read_json_body()
+      if payload is None:
+        self._send_json(400, {"error": "Invalid JSON"})
+        return
+      file_name = str(payload.get("fileName") or "").strip()
+      mime_type = str(payload.get("mimeType") or "").strip()
+      data_url = str(payload.get("dataUrl") or "").strip()
+      try:
+        icon_path = store_uploaded_icon(file_name, mime_type, data_url)
+      except ValueError as err:
+        self._send_json(400, {"error": str(err)})
+        return
+      self._send_json(201, {"iconUrl": icon_path})
       return
 
     if parsed.path == "/api/auth/register":

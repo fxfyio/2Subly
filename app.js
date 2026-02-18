@@ -6,6 +6,7 @@ const ADMIN_USER_STATUS_API = "/api/admin/users/status";
 const CURRENCY_CATALOG_API = "/api/currencies";
 const CURRENCY_RATE_API = "/api/currency-rate";
 const ICON_RESOLVE_API = "/api/icons/resolve";
+const ICON_UPLOAD_API = "/api/icons/upload";
 const PREF_KEY = "subly_base_currency_v1";
 const SETTINGS_KEY = "subly_settings_v1";
 const AUTH_TOKEN_KEY = "subly_auth_token_v1";
@@ -192,6 +193,11 @@ const els = {
   tagPreview: document.getElementById("tagPreview"),
   tags: document.getElementById("tags"),
   iconUrl: document.getElementById("iconUrl"),
+  recheckIconBtn: document.getElementById("recheckIconBtn"),
+  iconUpload: document.getElementById("iconUpload"),
+  iconUploadFileName: document.getElementById("iconUploadFileName"),
+  uploadIconBtn: document.getElementById("uploadIconBtn"),
+  iconUploadMessage: document.getElementById("iconUploadMessage"),
   iconResolvePreview: document.getElementById("iconResolvePreview"),
   cycle: document.getElementById("cycle"),
   nextPaymentDate: document.getElementById("nextPaymentDate"),
@@ -328,6 +334,7 @@ function normalizeIconUrl(value) {
   const raw = (value || "").trim();
   if (!raw) return "";
   if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^\/(?:assets|favicon)[A-Za-z0-9._~!$&'()*+,;=:@%\/-]*$/i.test(raw)) return raw;
   return "";
 }
 
@@ -469,6 +476,13 @@ function clearIconResolvePreview() {
   els.iconResolvePreview.innerHTML = "";
 }
 
+function setIconUploadMessage(text, type = "") {
+  if (!els.iconUploadMessage) return;
+  els.iconUploadMessage.textContent = text || "";
+  els.iconUploadMessage.classList.remove("error", "success");
+  if (type) els.iconUploadMessage.classList.add(type);
+}
+
 function renderIconResolvePreview({ iconUrl = "", source = "none", text = "", name = "" }) {
   if (!els.iconResolvePreview) return;
   if (!iconUrl && source !== "loading") {
@@ -496,7 +510,7 @@ function renderIconResolvePreview({ iconUrl = "", source = "none", text = "", na
     : "";
   els.iconResolvePreview.classList.remove("hidden");
   els.iconResolvePreview.innerHTML = `
-    <span class="icon-resolve-badge">
+    <span class="icon-resolve-badge${iconUrl ? " has-image" : ""}">
       ${iconHtml}
       <span class="icon-resolve-fallback"${iconUrl ? ' style="display:none"' : ""}>${escapeHtml(letter)}</span>
     </span>
@@ -1174,6 +1188,24 @@ async function resolveIconOnline(name, category) {
   return normalizeIconUrl(payload?.iconUrl || "");
 }
 
+async function uploadIconFile(file) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+  const payload = await request(ICON_UPLOAD_API, {
+    method: "POST",
+    body: JSON.stringify({
+      fileName: file.name || "icon",
+      mimeType: file.type || "",
+      dataUrl,
+    }),
+  });
+  return normalizeIconUrl(payload?.iconUrl || "");
+}
+
 async function markPaid(id) {
   const sub = state.subscriptions.find((s) => s.id === id);
   if (!sub) return;
@@ -1226,6 +1258,9 @@ function resetForm() {
   state.iconResolveSeq += 1;
   if (state.iconResolveTimerId) clearTimeout(state.iconResolveTimerId);
   clearIconResolvePreview();
+  if (els.iconUpload) els.iconUpload.value = "";
+  if (els.iconUploadFileName) els.iconUploadFileName.textContent = "未选择文件";
+  setIconUploadMessage("");
   setCategoryValue("");
 }
 
@@ -1310,7 +1345,7 @@ function renderTable() {
           <td class="name-col" data-label="订阅信息">
             <div class="info-main">
               <div class="service-name" data-hover-trigger="detail">
-                <span class="service-icon${iconImg ? "" : " fallback"}" style="background:${iconMeta.bg}">
+                <span class="service-icon${iconImg ? " has-image" : " fallback"}" style="background:${iconMeta.bg}">
                   ${iconImg}
                   <span class="service-fallback">${escapeHtml(iconMeta.letter)}</span>
                 </span>
@@ -1390,7 +1425,7 @@ function showRowHoverCard(sub, clientX, clientY) {
   els.rowHoverCard.innerHTML = `
     <div class="hover-card-head">
       <h4>${escapeHtml(sub.name)}</h4>
-      <span class="hover-logo${iconImg ? "" : " fallback"}" style="background:${iconMeta.bg}">
+      <span class="hover-logo${iconImg ? " has-image" : " fallback"}" style="background:${iconMeta.bg}">
         ${iconImg}
         <span class="hover-logo-fallback">${escapeHtml(iconMeta.letter)}</span>
       </span>
@@ -1960,6 +1995,45 @@ function bindEvents() {
   });
   els.name.addEventListener("input", scheduleAutoIconResolve);
   els.iconUrl.addEventListener("input", scheduleAutoIconResolve);
+  if (els.recheckIconBtn) {
+    els.recheckIconBtn.addEventListener("click", () => {
+      els.iconUrl.value = "";
+      state.autoResolvedIconUrl = "";
+      scheduleAutoIconResolve();
+    });
+  }
+  if (els.uploadIconBtn) {
+    els.uploadIconBtn.addEventListener("click", async () => {
+      const file = els.iconUpload?.files?.[0];
+      if (!file) {
+        setIconUploadMessage("请先选择图片文件", "error");
+        return;
+      }
+      if (file.size > 1024 * 1024) {
+        setIconUploadMessage("文件过大，请控制在 1MB 以内", "error");
+        return;
+      }
+      setIconUploadMessage("上传中...");
+      try {
+        const iconUrl = await uploadIconFile(file);
+        if (!iconUrl) throw new Error("上传后未返回图标地址");
+        els.iconUrl.value = iconUrl;
+        setIconUploadMessage("上传成功，已应用该图标", "success");
+        scheduleAutoIconResolve();
+      } catch (err) {
+        setIconUploadMessage(`上传失败: ${err.message}`, "error");
+      }
+    });
+  }
+  if (els.iconUpload) {
+    els.iconUpload.addEventListener("change", () => {
+      const file = els.iconUpload?.files?.[0];
+      if (els.iconUploadFileName) {
+        els.iconUploadFileName.textContent = file ? file.name : "未选择文件";
+      }
+      setIconUploadMessage("");
+    });
+  }
   els.categorySelect.addEventListener("change", () => {
     toggleCategoryCustom();
     scheduleAutoIconResolve();

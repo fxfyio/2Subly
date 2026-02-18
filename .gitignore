@@ -12,6 +12,7 @@ subly.db
 data/
 *.log
 .server.log
+assets/uploads/
 
 # Env / local overrides
 .env
