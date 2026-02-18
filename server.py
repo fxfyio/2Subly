@@ -450,6 +450,18 @@ def build_icon_candidates(name, category=""):
   return candidates[:24]
 
 
+def resolve_hint_icon(name):
+  n = normalize_service_text(name)
+  if not n:
+    return ""
+  for item in SERVICE_ICON_HINTS:
+    keyword = item.get("keyword", "")
+    icon = item.get("icon", "")
+    if keyword and icon and keyword in n:
+      return icon
+  return ""
+
+
 def fetch_itunes_icon(name):
   term = (name or "").strip()
   if not term:
@@ -484,15 +496,28 @@ def fetch_itunes_icon(name):
       bundle = str(item.get("bundleId") or "").strip().lower()
       n_track = normalize_service_text(track_name).replace(" ", "")
 
+      strong_match = False
       score = 0
       if n_track and normalized_term and (normalized_term in n_track or n_track in normalized_term):
-        score += 4
+        score += 5
+        strong_match = True
       if normalized_term and normalized_term in bundle:
-        score += 3
+        score += 4
+        strong_match = True
+      if normalized_term:
+        for token in [t for t in re.split(r"\s+", normalize_service_text(term)) if len(t) >= 3]:
+          if token in n_track or token in bundle:
+            score += 1
+            strong_match = True
+            break
       if str(item.get("primaryGenreName") or "").lower() in {"music", "entertainment", "productivity"}:
         score += 1
       if item.get("sellerName"):
         score += 1
+
+      # Avoid mismatching to unrelated apps with weak fuzzy scores.
+      if not strong_match:
+        continue
 
       if score > best_score:
         best_score = score
@@ -509,6 +534,11 @@ def resolve_icon_url(name, category=""):
     return {"iconUrl": "", "provider": "none", "cached": False}
 
   cached = icon_cache_get(cache_key)
+  hint_icon = resolve_hint_icon(name)
+  if hint_icon:
+    if not cached or cached.get("iconUrl") != hint_icon:
+      icon_cache_set(cache_key, hint_icon, "hint-simpleicons")
+    return {"iconUrl": hint_icon, "provider": "hint-simpleicons", "cached": False}
   if cached:
     return cached
 
