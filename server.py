@@ -127,31 +127,21 @@ def parse_iso(dt_text):
 
 
 def prepare_db_path():
-  global DB_PATH
-  candidates = [DB_PATH]
-  fallback = Path("/tmp/subly.db")
-  if fallback not in candidates:
-    candidates.append(fallback)
-
-  last_err = None
-  for candidate in candidates:
+  DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+  probe = DB_PATH.parent / ".subly_write_probe"
+  try:
+    with probe.open("a", encoding="utf-8"):
+      pass
+  except OSError as err:
+    # Fail fast to avoid silently writing data into an ephemeral fallback DB.
+    raise RuntimeError(
+      f"database path is not writable: '{DB_PATH}' (fix volume mount and permissions)"
+    ) from err
+  finally:
     try:
-      candidate.parent.mkdir(parents=True, exist_ok=True)
-      probe = candidate.parent / ".subly_write_probe"
-      with probe.open("a", encoding="utf-8"):
-        pass
-      try:
-        probe.unlink()
-      except OSError:
-        pass
-      if candidate != DB_PATH:
-        print(f"[WARN] DB path '{DB_PATH}' not writable, fallback to '{candidate}'")
-      DB_PATH = candidate
-      return
-    except OSError as err:
-      last_err = err
-
-  raise RuntimeError(f"no writable database path for '{DB_PATH}': {last_err}")
+      probe.unlink()
+    except OSError:
+      pass
 
 
 def db_conn():
@@ -1521,6 +1511,7 @@ def main():
   host = os.environ.get("HOST", "127.0.0.1")
   port = int(os.environ.get("PORT", "5173"))
   server = ThreadingHTTPServer((host, port), Handler)
+  print(f"Using DB path: {DB_PATH}")
   print(f"Serving on http://{host}:{port}")
   server.serve_forever()
 
